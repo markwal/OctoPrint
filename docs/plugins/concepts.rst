@@ -31,8 +31,8 @@ plugin subsystem about themselves. These are simple package attributes defined i
    # ...
 
    __plugin_name__ = "My Plugin"
-   def __plugin_init__():
-       # whatever you need to do to init your plugin, if anything at all
+   def __plugin_load__():
+       # whatever you need to do to load your plugin, if anything at all
        pass
 
 The following properties are recognized:
@@ -60,9 +60,15 @@ The following properties are recognized:
   Method called upon discovery of the plugin by the plugin subsystem, should return ``True`` if the
   plugin can be instantiated later on, ``False`` if there are reasons why not, e.g. if dependencies
   are missing.
-``__plugin_init__``
-  Method called upon initializing of the plugin by the plugin subsystem, can be used to instantiate
+``__plugin_load__``
+  Method called upon loading of the plugin by the plugin subsystem, can be used to instantiate
   plugin implementations, connecting them to hooks etc.
+``__plugin_unload__``
+  Method called upon unloading of the plugin by the plugin subsystem, can be used to do any final clean ups.
+``__plugin_enable__``
+  Method called upon enabling of the plugin by the plugin subsystem. Also see :func:`~octoprint.plugin.core.Plugin.on_plugin_enabled``.
+``__plugin_disable__``
+  Method called upon disabling of the plugin by the plugin subsystem. Also see :func:`~octoprint.plugin.core.Plugin.on_plugin_disabled``.
 
 .. _sec-plugin-concepts-mixins:
 
@@ -184,7 +190,7 @@ to register themselves with the Software Update Plugin by returning their own up
 
 If you want your hook handler to be an instance method of a mixin implementation of your plugin (for example since you
 need access to instance variables handed to your implementation via mixin invocations), you can get this work
-by using a small trick. Instead of defining it directly via ``__plugin_hooks__`` utilize the ``__plugin_init__``
+by using a small trick. Instead of defining it directly via ``__plugin_hooks__`` utilize the ``__plugin_load__``
 property instead, manually instantiate your implementation instance and then add its hook handler method to the
 ``__plugin_hooks__`` property and itself to the ``__plugin_implementation__`` property. See the following example.
 
@@ -218,7 +224,7 @@ which provides it's SSDP browsing and Zeroconf browsing and publishing functions
    :caption: Excerpt from the Discovery Plugin showing the declaration of its exported helpers.
    :name: sec-plugin-concepts-helpers-example-export
 
-   def __plugin_init__():
+   def __plugin_load__():
        if not pybonjour:
            # no pybonjour available, we can't use that
            logging.getLogger("octoprint.plugins." + __name__).info("pybonjour is not installed, Zeroconf Discovery won't be available")
@@ -323,3 +329,12 @@ An overview of these properties follows.
 
    :ref:`Available Mixins <sec-plugins-mixins>`
        Some mixin types trigger the injection of additional properties.
+
+.. _sec-plugins-concept-lifecycle:
+
+Lifecycle
+---------
+
+.. image:: ../images/plugins_lifecycle.png
+   :align: center
+   :alt: The lifecycle of OctoPrint plugins.
