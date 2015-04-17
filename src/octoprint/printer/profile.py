@@ -31,6 +31,14 @@ class BedTypes(object):
 	def values(cls):
 		return [getattr(cls, name) for name in cls.__dict__ if not name.startswith("__")]
 
+class BedOrigin(object):
+	LOWERLEFT = "lowerleft"
+	CENTER = "center"
+
+	@classmethod
+	def values(cls):
+		return [getattr(cls, name) for name in cls.__dict__ if not name.startswith("__")]
+
 class PrinterProfileManager(object):
 	"""
 	Manager for printer profiles. Offers methods to select the globally used printer profile and to list, add, remove,
@@ -72,6 +80,9 @@ class PrinterProfileManager(object):
 	   * - ``volume.formFactor``
 	     - ``string``
 	     - Form factor of the print bed, either ``rectangular`` or ``circular``
+	   * - ``volume.origin``
+	     - ``string``
+	     - Location of gcode origin in the print volume, either ``lowerleft`` or ``center``
 	   * - ``heatedBed``
 	     - ``bool``
 	     - Whether the printer has a heated bed (``True``) or not (``False``)
@@ -138,6 +149,7 @@ class PrinterProfileManager(object):
 			depth = 200,
 			height = 200,
 			formFactor = BedTypes.RECTANGULAR,
+			origin = BedOrigin.LOWERLEFT
 		),
 		heatedBed = False,
 		extruder=dict(
@@ -291,8 +303,15 @@ class PrinterProfileManager(object):
 		import yaml
 		with open(path) as f:
 			profile = yaml.safe_load(f)
-		profile = dict_merge(self._load_default(), profile)
+
+		if self._migrate_profile(profile):
+			try:
+				self._save_to_path(path, profile, allow_overwrite=True)
+			except:
+				self._logger.exception("Tried to save profile to {path} after migrating it while loading, ran into exception".format(path=path))
+
 		profile = self._ensure_valid_profile(profile)
+
 		if not profile:
 			self._logger.warn("Invalid profile: %s" % path)
 			raise InvalidProfileError()
@@ -344,6 +363,14 @@ class PrinterProfileManager(object):
 		sanitized_name = sanitized_name.replace(" ", "_")
 		return sanitized_name
 
+	def _migrate_profile(self, profile):
+		# make sure profile format is up to date
+		if "volume" in profile and "formFactor" in profile["volume"] and not "origin" in profile["volume"]:
+			profile["volume"]["origin"] = BedOrigin.CENTER if profile["volume"]["formFactor"] == BedTypes.CIRCULAR else BedOrigin.LOWERLEFT
+			return True
+
+		return False
+
 	def _ensure_valid_profile(self, profile):
 		# ensure all keys are present
 		if not dict_contains_keys(self.default, profile):
@@ -385,6 +412,15 @@ class PrinterProfileManager(object):
 
 		# validate form factor
 		if not profile["volume"]["formFactor"] in BedTypes.values():
+			return False
+
+		# validate origin type
+		if not profile["volume"]["origin"] in BedOrigin.values():
+			return False
+
+		# ensure origin and form factor combination is legal
+		if profile["volume"]["formFactor"] == BedTypes.CIRCULAR and not profile["volume"]["origin"] == BedOrigin.CENTER:
+			# we do not support circular beds with anything other than a centered origin
 			return False
 
 		# validate offsets
