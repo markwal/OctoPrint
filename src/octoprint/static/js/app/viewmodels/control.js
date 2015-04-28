@@ -155,12 +155,41 @@ $(function() {
             }
 
             if (control.hasOwnProperty("input")) {
-                for (var i = 0; i < control.input.length; i++) {
-                    control.input[i].value = ko.observable(control.input[i].defaultValue || "0");
-                    if (!control.input[i].hasOwnProperty("slider")) {
-                        control.input[i].slider = false;
+                var attributeToInt = function(obj, key, def) {
+                    if (obj.hasOwnProperty(key)) {
+                        var val = obj[key];
+                        if (_.isNumber(val)) {
+                            return val;
+                        }
+
+                        var parsedVal = parseInt(val);
+                        if (!isNaN(parsedVal)) {
+                            return parsedVal;
+                        }
                     }
-                }
+                    return def;
+                };
+
+                _.each(control.input, function (element) {
+                    if (element.hasOwnProperty("slider") && _.isObject(element.slider)) {
+                        element.slider["min"] = attributeToInt(element.slider, "min", 0);
+                        element.slider["max"] = attributeToInt(element.slider, "max", 255);
+
+                        // try defaultValue, default to min
+                        var defaultValue = attributeToInt(element, "default", element.slider.min);
+
+                        // if default value is not within range of min and max, correct that
+                        if (!_.inRange(defaultValue, element.slider.min, element.slider.max)) {
+                            // use bound closer to configured default value
+                            defaultValue = defaultValue < element.slider.min ? element.slider.min : element.slider.max;
+                        }
+
+                        element.value = ko.observable(defaultValue);
+                    } else {
+                        element.slider = false;
+                        element.value = ko.observable((element.hasOwnProperty("default")) ? element["default"] : undefined);
+                    }
+                });
             }
 
             var js;
