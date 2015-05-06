@@ -648,13 +648,13 @@ class MachineCom(object):
 			return
 
 		self._changeState(self.STATE_TRANSFERING_FILE)
-		self.sendCommand("M28 %s" % filename)
+		self.sendCommand("M28 %s" % filename.lower())
 
 	def endSdFileTransfer(self, filename):
 		if not self.isOperational() or self.isBusy():
 			return
 
-		self.sendCommand("M29 %s" % filename)
+		self.sendCommand("M29 %s" % filename.lower())
 		self._changeState(self.STATE_OPERATIONAL)
 		self.refreshSdFiles()
 
@@ -665,7 +665,7 @@ class MachineCom(object):
 			# do not delete a file from sd we are currently printing from
 			return
 
-		self.sendCommand("M30 %s" % filename)
+		self.sendCommand("M30 %s" % filename.lower())
 		self.refreshSdFiles()
 
 	def refreshSdFiles(self):
@@ -841,7 +841,7 @@ class MachineCom(object):
 				##~~ SD file list
 				# if we are currently receiving an sd file list, each line is just a filename, so just read it and abort processing
 				if self._sdFileList and not "End file list" in line:
-					preprocessed_line = line.strip()
+					preprocessed_line = line.strip().lower()
 					fileinfo = preprocessed_line.rsplit(None, 1)
 					if len(fileinfo) > 1:
 						# we might have extended file information here, so let's split filename and size and try to make them a bit nicer
@@ -940,8 +940,6 @@ class MachineCom(object):
 					match = self._regex_sdPrintingByte.search(line)
 					self._currentFile.setFilepos(int(match.group(1)))
 					self._callback.on_comm_progress()
-				elif 'SD printing paused' in line and self.isSdPrinting():
-					self._changeState(self.STATE_PAUSED)
 				elif 'File opened' in line and not self._ignore_select:
 					# answer to M23, at least on Marlin, Repetier and Sprinter: "File opened:%s Size:%d"
 					match = self._regex_sdFileOpened.search(line)
@@ -962,7 +960,7 @@ class MachineCom(object):
 							"origin": self._currentFile.getFileLocation()
 						})
 				elif 'Writing to file' in line:
-					# answer to M28, at least on Marlin, Repetier and Sprinter: "Writing to file: %s"
+					# anwer to M28, at least on Marlin, Repetier and Sprinter: "Writing to file: %s"
 					self._changeState(self.STATE_PRINTING)
 					self._clear_to_send.set()
 					line = "ok"
