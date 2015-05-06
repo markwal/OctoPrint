@@ -8,7 +8,7 @@ __copyright__ = "Copyright (C) 2014 The OctoPrint Project - Released under terms
 import logging
 
 from flask import request, jsonify, make_response
-from flask.exceptions import BadRequest
+from werkzeug.exceptions import BadRequest
 
 from octoprint.events import eventManager, Events
 from octoprint.settings import settings
@@ -89,7 +89,8 @@ def getSettings():
 			"watched": s.getBaseFolder("watched")
 		},
 		"temperature": {
-			"profiles": s.get(["temperature", "profiles"])
+			"profiles": s.get(["temperature", "profiles"]),
+			"cutoff": s.getInt(["temperature", "cutoff"])
 		},
 		"system": {
 			"actions": s.get(["system", "actions"]),
@@ -210,6 +211,7 @@ def setSettings():
 
 	if "temperature" in data.keys():
 		if "profiles" in data["temperature"].keys(): s.set(["temperature", "profiles"], data["temperature"]["profiles"])
+		if "cutoff" in data["temperature"].keys(): s.setInt(["temperature", "cutoff"], data["temperature"]["cutoff"])
 
 	if "terminalFilters" in data.keys():
 		s.set(["terminalFilters"], data["terminalFilters"])

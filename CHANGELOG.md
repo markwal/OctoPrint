@@ -122,6 +122,12 @@
   and [#852](https://github.com/foosel/OctoPrint/pull/852)). Printer profiles now contain a new settings ``volume.origin``
   which can either be ``lowerleft`` or ``center``. For circular beds only ``center`` is supported.
 * Made baudrate detection a bit more solid, still can't perform wonders.
+* Only show configuration options for additional extruders if more than one is available, and don't include offset
+  configuration for first nozzle which acts as reference for the other offsets ([#677](https://github.com/foosel/OctoPrint/issues/677)).
+* Cut off of the temperature graph is now not based on the number of data points any more but on the actual time of the
+  data points. Anything older than ``n`` minutes will be cut off, with ``n`` defaulting to 30min. This value can be
+  changed under "Temperatures" in the Settings ([#343](https://github.com/foosel/OctoPrint/issues/343)).
+* High-DPI support for the GCode viewer ([#837](https://github.com/foosel/OctoPrint/issues/837))
 
 ### Bug Fixes
 
@@ -152,6 +158,8 @@
   * [#664](https://github.com/foosel/OctoPrint/issues/664) - Fixed jog controls again
   * [#677](https://github.com/foosel/OctoPrint/issues/677) - Fixed extruder offsets not being properly editable in
     printer profiles
+  * [#678](https://github.com/foosel/OctoPrint/issues/678) - SockJS endpoints is now referenced by relative URL
+    using ``url_for``, should solve any issues with IE11.
   * [#683](https://github.com/foosel/OctoPrint/issues/683) - Fixed heated bed option not being properly displayed in
     printer profiles
   * [#685](https://github.com/foosel/OctoPrint/issues/685) - Quoted file name for Timelapse creation to not make

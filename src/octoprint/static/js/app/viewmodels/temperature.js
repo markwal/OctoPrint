@@ -32,6 +32,7 @@ $(function() {
         self.isLoading = ko.observable(undefined);
 
         self.temperature_profiles = self.settingsViewModel.temperature_profiles;
+        self.temperature_cutoff = self.settingsViewModel.temperature_cutoff;
 
         self.heaterOptions = ko.observable({});
 
@@ -116,13 +117,13 @@ $(function() {
 
         self.fromCurrentData = function(data) {
             self._processStateData(data.state);
-            self._processTemperatureUpdateData(data.temps);
+            self._processTemperatureUpdateData(data.serverTime, data.temps);
             self._processOffsetData(data.offsets);
         };
 
         self.fromHistoryData = function(data) {
             self._processStateData(data.state);
-            self._processTemperatureHistoryData(data.temps);
+            self._processTemperatureHistoryData(data.serverTime, data.temps);
             self._processOffsetData(data.offsets);
         };
 
@@ -136,7 +137,7 @@ $(function() {
             self.isLoading(data.flags.loading);
         };
 
-        self._processTemperatureUpdateData = function(data) {
+        self._processTemperatureUpdateData = function(serverTime, data) {
             if (data.length == 0)
                 return;
 
@@ -160,17 +161,12 @@ $(function() {
 
             if (!CONFIG_TEMPERATURE_GRAPH) return;
 
-            self.temperatures = self._processTemperatureData(data, self.temperatures);
-            _.each(_.keys(self.heaterOptions()), function(d) {
-                self.temperatures[d].actual = self.temperatures[d].actual.slice(-300);
-                self.temperatures[d].target = self.temperatures[d].target.slice(-300);
-            });
-
+            self.temperatures = self._processTemperatureData(serverTime, data, self.temperatures);
             self.updatePlot();
         };
 
-        self._processTemperatureHistoryData = function(data) {
-            self.temperatures = self._processTemperatureData(data);
+        self._processTemperatureHistoryData = function(serverTime, data) {
+            self.temperatures = self._processTemperatureData(serverTime, data);
             self.updatePlot();
         };
 
@@ -187,8 +183,9 @@ $(function() {
             }
         };
 
-        self._processTemperatureData = function(data, result) {
+        self._processTemperatureData = function(serverTime, data, result) {
             var types = _.keys(self.heaterOptions());
+            var clientTime = Date.now();
 
             // make sure result is properly initialized
             if (!result) {
@@ -205,7 +202,8 @@ $(function() {
 
             // convert data
             _.each(data, function(d) {
-                var time = d.time * 1000;
+                var timeDiff = (serverTime - d.time) * 1000;
+                var time = clientTime - timeDiff;
                 _.each(types, function(type) {
                     if (!d[type]) return;
                     result[type].actual.push([time, d[type].actual]);
@@ -213,6 +211,15 @@ $(function() {
 
                     self.hasBed(self.hasBed() || (type == "bed"));
                 })
+            });
+
+            var filterOld = function(item) {
+                return item[0] >= clientTime - self.temperature_cutoff() * 60 * 1000;
+            };
+
+            _.each(_.keys(self.heaterOptions()), function(d) {
+                result[d].actual = _.filter(result[d].actual, filterOld);
+                result[d].target = _.filter(result[d].target, filterOld);
             });
 
             return result;
