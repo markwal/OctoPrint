@@ -65,26 +65,15 @@ class CuraPlugin(octoprint.plugin.SlicerPlugin,
 			try:
 				profile_dict = Profile.from_cura_ini(flask.request.values[input_upload_path])
 			except Exception as e:
-				return flask.make_response("Something went wrong while converting imported profile: {message}".format(str(e)), 500)
-
-		elif input_name in flask.request.files:
-			temp_file = tempfile.NamedTemporaryFile("wb", delete=False)
-			try:
-				temp_file.close()
-				upload = flask.request.files[input_name]
-				upload.save(temp_file.name)
-				profile_dict = Profile.from_cura_ini(temp_file.name)
-			except Exception as e:
-				return flask.make_response("Something went wrong while converting imported profile: {message}".format(str(e)), 500)
-			finally:
-				os.remove(temp_file)
-
-			filename = upload.filename
+				self._logger.exception("Error while converting the imported profile")
+				return flask.make_response("Something went wrong while converting imported profile: {message}".format(message=str(e)), 500)
 
 		else:
+			self._logger.warn("No profile file included for importing, aborting")
 			return flask.make_response("No file included", 400)
 
 		if profile_dict is None:
+			self._logger.warn("Could not convert profile, aborting")
 			return flask.make_response("Could not convert Cura profile", 400)
 
 		name, _ = os.path.splitext(filename)
@@ -114,6 +103,7 @@ class CuraPlugin(octoprint.plugin.SlicerPlugin,
 			                            display_name=profile_display_name,
 			                            description=profile_description)
 		except octoprint.slicing.ProfileAlreadyExists:
+			self._logger.warn("Profile {profile_name} already exists, aborting".format(**locals()))
 			return flask.make_response("A profile named {profile_name} already exists for slicer cura".format(**locals()), 409)
 
 		result = dict(

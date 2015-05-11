@@ -93,7 +93,8 @@
 * Improved behaviour of terminal:
   * Disabling autoscrolling now also stops cutting of the log while it's enabled, effectively preventing log lines from
     being modified at all ([#735](https://github.com/foosel/OctoPrint/issues/735))
-  * Applying filters displays ``[...]`` where lines where removed
+  * Applying filters displays ``[...]`` where lines where removed and doesn't cause scrolling on filtered lines
+    anymore ([#286](https://github.com/foosel/OctoPrint/issues/286))
   * Added a link to scroll to the end of the terminal log (useful for when autoscroll is disabled)
   * Added a link to select all current contents of the terminal log for easy copy-pasting
   * Added a display of how many lines are displayed, how many are filtered and how many are available in total
@@ -110,9 +111,9 @@
   NTP server on a Raspberry Pi image. Achieved through monkey patching Tornado with
   [this PR](https://github.com/tornadoweb/tornado/pull/1290).
 * Serial ports matching ``/dev/ttyAMA*`` are not anymore listed by default (this was the reason for a lot of people
-  attempting to connect to their printer on their Raspberry Pis, on which ``/dev/ttyAMA0`` is the OS's serial console
-  by default). Added configuration of additional ports to the Serial Connection section in the Settings to make it easier
-  for those people who do indeed have their printer connected to ``/dev/ttyAMA0``.
+  running into problems while attempting to connect to their printer on their Raspberry Pis, on which ``/dev/ttyAMA0`` 
+  is the OS's serial console by default). Added configuration of additional ports to the Serial Connection section in 
+  the Settings to make it easier for those people who do indeed have their printer connected to ``/dev/ttyAMA0``.
 * Better behaviour of the settings dialog on low-width devices, navigation and content also now scroll independently 
   from each other (see also [#823](https://github.com/foosel/OctoPrint/pull/823))
 * Renamed "Temperature Timeout" and "SD Status Timeout" in Settings to "Temperature Interval" and "SD Status Interval"
@@ -127,7 +128,8 @@
 * Cut off of the temperature graph is now not based on the number of data points any more but on the actual time of the
   data points. Anything older than ``n`` minutes will be cut off, with ``n`` defaulting to 30min. This value can be
   changed under "Temperatures" in the Settings ([#343](https://github.com/foosel/OctoPrint/issues/343)).
-* High-DPI support for the GCode viewer ([#837](https://github.com/foosel/OctoPrint/issues/837))
+* High-DPI support for the GCode viewer ([#837](https://github.com/foosel/OctoPrint/issues/837)).
+* Stop websocket connections from multiplying([#888](https://github.com/foosel/OctoPrint/pull/888)).
 
 ### Bug Fixes
 
@@ -152,6 +154,7 @@
 * [#330](https://github.com/foosel/OctoPrint/issues/330) - Ping pong sending to fix potential acknowledgement errors.
   Also affects [#166](https://github.com/foosel/OctoPrint/issues/166), [#470](https://github.com/foosel/OctoPrint/issues/470)
   and [#490](https://github.com/foosel/OctoPrint/issues/490).
+* [#825](https://github.com/foosel/OctoPrint/issues/825) - Fixed "please visualize" button of large GCODE files
 * Various fixes of bugs in newly introduced features and improvements:
   * [#625](https://github.com/foosel/OctoPrint/pull/625) - Newly added GCODE files were not being added to the analysis
     queue
@@ -178,6 +181,8 @@
     of the objects
   * [#795](https://github.com/foosel/OctoPrint/issues/795) - Allow adding slicing profiles for unconfigured slicers
   * [#809](https://github.com/foosel/OctoPrint/issues/809) - Added proper form validation to printer profile editor
+  * [#824](https://github.com/foosel/OctoPrint/issues/824) - Settings getting lost when switching between panes in
+    the settings dialog (fix provided by [#879](https://github.com/foosel/OctoPrint/pull/879))
 * Various fixes without tickets:
   * GCODE viewer now doesn't stumble over completely extrusionless GCODE files
   * Do not deliver the API key on settings API unless user has admin rights
