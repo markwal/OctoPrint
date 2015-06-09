@@ -29,6 +29,9 @@ import logging
 import pkg_resources
 import pkginfo
 
+EntryPointOrigin = namedtuple("EntryPointOrigin", "type, entry_point, module_name, package_name, package_version")
+FolderOrigin = namedtuple("FolderOrigin", "type, folder")
+
 class PluginInfo(object):
 	"""
 	The :class:`PluginInfo` class wraps all available information about a registered plugin.
@@ -132,36 +135,42 @@ class PluginInfo(object):
 		self._url = url
 		self._license = license
 
-	def validate(self):
-		# if the plugin still uses __plugin_implementations__, log a deprecation warning and put the first
-		# item into __plugin_implementation__
-		if hasattr(self.instance, self.__class__.attr_implementations):
-			if not hasattr(self.instance, self.__class__.attr_implementation):
-				# deprecation warning
-				import warnings
-				warnings.warn("{name} uses deprecated control property __plugin_implementations__, use __plugin_implementation__ instead - only the first implementation of {name} will be recognized".format(name=self.key), DeprecationWarning)
+	def validate(self, phase, additional_validators=None):
+		if phase == "before_load":
+			# if the plugin still uses __plugin_init__, log a deprecation warning and move it to __plugin_load__
+			if hasattr(self.instance, self.__class__.attr_init):
+				if not hasattr(self.instance, self.__class__.attr_load):
+					# deprecation warning
+					import warnings
+					warnings.warn("{name} uses deprecated control property __plugin_init__, use __plugin_load__ instead".format(name=self.key), DeprecationWarning)
 
-				# put first item into __plugin_implementation__
-				implementations = getattr(self.instance, self.__class__.attr_implementations)
-				if len(implementations) > 0:
-					setattr(self.instance, self.__class__.attr_implementation, implementations[0])
+					# move it
+					init = getattr(self.instance, self.__class__.attr_init)
+					setattr(self.instance, self.__class__.attr_load, init)
 
-			# delete __plugin_implementations__
-			delattr(self.instance, self.__class__.attr_implementations)
+				# delete __plugin_init__
+				delattr(self.instance, self.__class__.attr_init)
 
-		# if the plugin still uses __plugin_init__, log a deprecation warning and move it to __plugin_load__
-		if hasattr(self.instance, self.__class__.attr_init):
-			if not hasattr(self.instance, self.__class__.attr_load):
-				# deprecation warning
-				import warnings
-				warnings.warn("{name} uses deprecated control property __plugin_init__, use __plugin_load__ instead".format(name=self.key), DeprecationWarning)
+		elif phase == "after_load":
+			# if the plugin still uses __plugin_implementations__, log a deprecation warning and put the first
+			# item into __plugin_implementation__
+			if hasattr(self.instance, self.__class__.attr_implementations):
+				if not hasattr(self.instance, self.__class__.attr_implementation):
+					# deprecation warning
+					import warnings
+					warnings.warn("{name} uses deprecated control property __plugin_implementations__, use __plugin_implementation__ instead - only the first implementation of {name} will be recognized".format(name=self.key), DeprecationWarning)
 
-				# move it
-				init = getattr(self.instance, self.__class__.attr_init)
-				setattr(self.instance, self.__class__.attr_load, init)
+					# put first item into __plugin_implementation__
+					implementations = getattr(self.instance, self.__class__.attr_implementations)
+					if len(implementations) > 0:
+						setattr(self.instance, self.__class__.attr_implementation, implementations[0])
 
-			# delete __plugin_init__
-			delattr(self.instance, self.__class__.attr_init)
+				# delete __plugin_implementations__
+				delattr(self.instance, self.__class__.attr_implementations)
+
+		if additional_validators is not None:
+			for validator in additional_validators:
+				validator(phase, self)
 
 	def __str__(self):
 		if self.version:
@@ -419,7 +428,7 @@ class PluginManager(object):
 	It is able to discover plugins both through possible file system locations as well as customizable entry points.
 	"""
 
-	def __init__(self, plugin_folders, plugin_types, plugin_entry_points, logging_prefix=None, plugin_disabled_list=None, plugin_restart_needing_hooks=None):
+	def __init__(self, plugin_folders, plugin_types, plugin_entry_points, logging_prefix=None, plugin_disabled_list=None, plugin_restart_needing_hooks=None, plugin_obsolete_hooks=None, plugin_validators=None):
 		self.logger = logging.getLogger(__name__)
 
 		if logging_prefix is None:
@@ -432,6 +441,8 @@ class PluginManager(object):
 		self.plugin_entry_points = plugin_entry_points
 		self.plugin_disabled_list = plugin_disabled_list
 		self.plugin_restart_needing_hooks = plugin_restart_needing_hooks
+		self.plugin_obsolete_hooks = plugin_obsolete_hooks
+		self.plugin_validators = plugin_validators
 		self.logging_prefix = logging_prefix
 
 		self.enabled_plugins = dict()
@@ -451,6 +462,8 @@ class PluginManager(object):
 
 		self.registered_clients = []
 
+		self.marked_plugins = defaultdict(list)
+
 		self.reload_plugins(startup=True, initialize_implementations=False)
 
 	@property
@@ -459,18 +472,19 @@ class PluginManager(object):
 		plugins.update(self.disabled_plugins)
 		return plugins
 
-	def find_plugins(self, existing=None):
+	def find_plugins(self, existing=None, ignore_uninstalled=True):
 		if existing is None:
-			existing = self.plugins
+			existing = dict(self.plugins)
 
 		result = dict()
 		if self.plugin_folders:
-			result.update(self._find_plugins_from_folders(self.plugin_folders, existing))
+			result.update(self._find_plugins_from_folders(self.plugin_folders, existing, ignored_uninstalled=ignore_uninstalled))
 		if self.plugin_entry_points:
-			result.update(self._find_plugins_from_entry_points(self.plugin_entry_points, existing))
+			existing.update(result)
+			result.update(self._find_plugins_from_entry_points(self.plugin_entry_points, existing, ignore_uninstalled=ignore_uninstalled))
 		return result
 
-	def _find_plugins_from_folders(self, folders, existing):
+	def _find_plugins_from_folders(self, folders, existing, ignored_uninstalled=True):
 		result = dict()
 
 		for folder in folders:
@@ -495,13 +509,13 @@ class PluginManager(object):
 				else:
 					continue
 
-				if key in existing or key in result:
+				if key in existing or key in result or (ignored_uninstalled and key in self.marked_plugins["uninstalled"]):
 					# plugin is already defined, ignore it
 					continue
 
 				plugin = self._import_plugin_from_module(key, folder=folder)
 				if plugin:
-					plugin.origin = ("folder", folder)
+					plugin.origin = FolderOrigin("folder", folder)
 					if readonly:
 						plugin.bundled = True
 
@@ -511,7 +525,7 @@ class PluginManager(object):
 
 		return result
 
-	def _find_plugins_from_entry_points(self, groups, existing):
+	def _find_plugins_from_entry_points(self, groups, existing, ignore_uninstalled=True):
 		result = dict()
 
 		# let's make sure we have a current working set
@@ -526,11 +540,12 @@ class PluginManager(object):
 				module_name = entry_point.module_name
 				version = entry_point.dist.version
 
-				if key in existing or key in result:
-					# plugin is already defined, ignore it
+				if key in existing or key in result or (ignore_uninstalled and key in self.marked_plugins["uninstalled"]):
+					# plugin is already defined or marked as uninstalled, ignore it
 					continue
 
 				kwargs = dict(module_name=module_name, version=version)
+				package_name = None
 				try:
 					module_pkginfo = InstalledEntryPoint(entry_point)
 				except:
@@ -547,7 +562,7 @@ class PluginManager(object):
 
 				plugin = self._import_plugin_from_module(key, **kwargs)
 				if plugin:
-					plugin.origin = ("entry_point", group, module_name, package_name)
+					plugin.origin = EntryPointOrigin("entry_point", group, module_name, package_name, version)
 					plugin.enabled = False
 					result[key] = plugin
 
@@ -588,12 +603,15 @@ class PluginManager(object):
 	def _is_plugin_disabled(self, key):
 		return key in self.plugin_disabled_list or key.endswith('disabled')
 
-	def reload_plugins(self, startup=False, initialize_implementations=True):
+	def reload_plugins(self, startup=False, initialize_implementations=True, force_reload=None):
 		self.logger.info("Loading plugins from {folders} and installed plugin packages...".format(
 			folders=", ".join(map(lambda x: x[0] if isinstance(x, tuple) else str(x), self.plugin_folders))
 		))
 
-		plugins = self.find_plugins()
+		if force_reload is None:
+			force_reload = []
+
+		plugins = self.find_plugins(existing=dict((k, v) for k, v in self.plugins.items() if not k in force_reload))
 		self.disabled_plugins.update(plugins)
 
 		for name, plugin in plugins.items():
@@ -601,8 +619,10 @@ class PluginManager(object):
 				self.load_plugin(name, plugin, startup=startup, initialize_implementation=initialize_implementations)
 				if not self._is_plugin_disabled(name):
 					self.enable_plugin(name, plugin=plugin, initialize_implementation=initialize_implementations, startup=startup)
-			except (PluginLifecycleException, PluginNeedsRestart):
+			except PluginNeedsRestart:
 				pass
+			except PluginLifecycleException as e:
+				self.logger.info(str(e))
 
 		if len(self.enabled_plugins) <= 0:
 			self.logger.info("No plugins found")
@@ -613,6 +633,16 @@ class PluginManager(object):
 				hooks=sum(map(lambda x: len(x), self.plugin_hooks.values()))
 			))
 
+	def mark_plugin(self, name, uninstalled=None):
+		if not name in self.plugins:
+			self.logger.warn("Trying to mark an unknown plugin {name}".format(**locals()))
+
+		if uninstalled is not None:
+			if uninstalled and not name in self.marked_plugins["uninstalled"]:
+				self.marked_plugins["uninstalled"].append(name)
+			elif not uninstalled and name in self.marked_plugins["uninstalled"]:
+				self.marked_plugins["uninstalled"].remove(name)
+
 	def load_plugin(self, name, plugin=None, startup=False, initialize_implementation=True):
 		if not name in self.plugins:
 			self.logger.warn("Trying to load an unknown plugin {name}".format(**locals()))
@@ -622,8 +652,9 @@ class PluginManager(object):
 			plugin = self.plugins[name]
 
 		try:
+			plugin.validate("before_load", additional_validators=self.plugin_validators)
 			plugin.load()
-			plugin.validate()
+			plugin.validate("after_load", additional_validators=self.plugin_validators)
 			self.on_plugin_loaded(name, plugin)
 
 			plugin.loaded = True
@@ -678,6 +709,9 @@ class PluginManager(object):
 
 		if not startup and self.is_restart_needing_plugin(plugin):
 			raise PluginNeedsRestart(name)
+
+		if self.has_obsolete_hooks(plugin):
+			raise PluginCantEnable(name, "Dependency on obsolete hooks detected, full functionality cannot be guaranteed")
 
 		try:
 			plugin.enable()
@@ -790,6 +824,16 @@ class PluginManager(object):
 				return True
 		return False
 
+	def has_obsolete_hooks(self, plugin):
+		if not plugin.hooks:
+			return False
+
+		hooks = plugin.hooks.keys()
+		for hook in hooks:
+			if self.is_obsolete_hook(hook):
+				return True
+		return False
+
 	def is_restart_needing_hook(self, hook):
 		if self.plugin_restart_needing_hooks is None:
 			return False
@@ -799,6 +843,11 @@ class PluginManager(object):
 				return True
 
 		return False
+
+	def is_obsolete_hook(self, hook):
+		if self.plugin_obsolete_hooks is None:
+			return False
+		return hook in self.plugin_obsolete_hooks
 
 	def initialize_implementations(self, additional_injects=None, additional_inject_factories=None):
 		for name, plugin in self.enabled_plugins.items():
@@ -1152,14 +1201,17 @@ class PluginLifecycleException(BaseException):
 
 		self.message = message.format(**locals())
 
+	def __str__(self):
+		return self.message
+
 class PluginCantInitialize(PluginLifecycleException):
 	def __init__(self, name, reason):
-		super(PluginLifecycleException, self).__init__(name, reason, "Plugin {name} cannot be initialized: {message}")
+		super(PluginLifecycleException, self).__init__(name, reason, "Plugin {name} cannot be initialized: {reason}")
 
 class PluginCantEnable(PluginLifecycleException):
 	def __init__(self, name, reason):
-		super(PluginLifecycleException, self).__init__(name, reason, "Plugin {name} cannot be enabled: {message}")
+		PluginLifecycleException.__init__(self, name, reason, "Plugin {name} cannot be enabled: {reason}")
 
 class PluginCantDisable(PluginLifecycleException):
 	def __init__(self, name, reason):
-		super(PluginLifecycleException, self).__init__(name, reason, "Plugin {name} cannot be disabled: {message}")
+		super(PluginLifecycleException, self).__init__(name, reason, "Plugin {name} cannot be disabled: {reason}")

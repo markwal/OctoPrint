@@ -82,7 +82,8 @@ default_settings = {
 			"temperature": 5,
 			"sdStatus": 1
 		},
-		"additionalPorts": []
+		"additionalPorts": [],
+		"longRunningCommands": ["G4", "G28", "G29", "G30", "G32"]
 	},
 	"server": {
 		"host": "0.0.0.0",
@@ -113,6 +114,7 @@ default_settings = {
 		"watermark": True,
 		"flipH": False,
 		"flipV": False,
+		"rotate90" : False,
 		"timelapse": {
 			"type": "off",
 			"options": {},
@@ -152,7 +154,9 @@ default_settings = {
 		"plugins": None,
 		"slicingProfiles": None,
 		"printerProfiles": None,
-		"scripts": None
+		"scripts": None,
+		"translations": None,
+		"generated": None
 	},
 	"temperature": {
 		"profiles": [
@@ -182,7 +186,7 @@ default_settings = {
 				"settings": [
 					"section_printer", "serial", "printerprofiles", "temperatures", "terminalfilters", "gcodescripts",
 					"section_features", "features", "webcam", "accesscontrol", "api",
-					"section_octoprint", "folders", "appearance", "logs"
+					"section_octoprint", "folders", "appearance", "logs", "plugin_pluginmanager", "plugin_softwareupdate"
 				],
 				"usersettings": ["access", "interface"],
 				"generic": []
@@ -244,6 +248,10 @@ default_settings = {
 		"stylesheet": "css",
 		"cache": {
 			"enabled": True
+		},
+		"webassets": {
+			"minify": False,
+			"bundle": True
 		},
 		"virtualPrinter": {
 			"enabled": False,
@@ -407,7 +415,7 @@ class Settings(object):
 				if source is None:
 					raise TemplateNotFound(template)
 				mtime = self._settings._mtime
-				return source, None, lambda: mtime == self._settings._last_modified
+				return source, None, lambda: mtime == self._settings.last_modified
 
 			def list_templates(self):
 				scripts = self._settings.get(["scripts"], merged=True)
@@ -515,13 +523,23 @@ class Settings(object):
 
 		return map(process_control, controls)
 
+	@property
+	def effective(self):
+		import octoprint.util
+		return octoprint.util.dict_merge(default_settings, self._config)
+
+	@property
+	def effective_yaml(self):
+		import yaml
+		return yaml.safe_dump(self.effective)
+
 	#~~ load and save
 
 	def load(self, migrate=False):
 		if os.path.exists(self._configfile) and os.path.isfile(self._configfile):
 			with open(self._configfile, "r") as f:
 				self._config = yaml.safe_load(f)
-				self._mtime = self._last_modified
+				self._mtime = self.last_modified
 		# changed from else to handle cases where the file exists, but is empty / 0 bytes
 		if not self._config:
 			self._config = {}
@@ -760,7 +778,7 @@ class Settings(object):
 		return True
 
 	@property
-	def _last_modified(self):
+	def last_modified(self):
 		"""
 		Returns:
 		    int: The last modification time of the configuration file.
@@ -916,7 +934,7 @@ class Settings(object):
 		if len(path) == 0:
 			return
 
-		if self._mtime is not None and self._last_modified != self._mtime:
+		if self._mtime is not None and self.last_modified != self._mtime:
 			self.load()
 
 		config = self._config

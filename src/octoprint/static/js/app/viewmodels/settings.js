@@ -16,6 +16,37 @@ $(function() {
         self.appearance_defaultLanguage = ko.observable();
 
         self.settingsDialog = undefined;
+        self.translationManagerDialog = undefined;
+        self.translationUploadElement = $("#settings_appearance_managelanguagesdialog_upload");
+        self.translationUploadButton = $("#settings_appearance_managelanguagesdialog_upload_start");
+
+        self.translationUploadFilename = ko.observable();
+        self.invalidTranslationArchive = ko.computed(function() {
+            var name = self.translationUploadFilename();
+            return name !== undefined && !(_.endsWith(name.toLocaleLowerCase(), ".zip") || _.endsWith(name.toLocaleLowerCase(), ".tar.gz") || _.endsWith(name.toLocaleLowerCase(), ".tgz") || _.endsWith(name.toLocaleLowerCase(), ".tar"));
+        });
+        self.enableTranslationUpload = ko.computed(function() {
+            var name = self.translationUploadFilename();
+            return name !== undefined && name.trim() != "" && !self.invalidTranslationArchive();
+        });
+
+        self.translations = new ItemListHelper(
+            "settings.translations",
+            {
+                "locale": function (a, b) {
+                    // sorts ascending
+                    if (a["locale"].toLocaleLowerCase() < b["locale"].toLocaleLowerCase()) return -1;
+                    if (a["locale"].toLocaleLowerCase() > b["locale"].toLocaleLowerCase()) return 1;
+                    return 0;
+                }
+            },
+            {
+            },
+            "locale",
+            [],
+            [],
+            0
+        );
 
         self.appearance_available_colors = ko.observable([
             {key: "default", name: gettext("default")},
@@ -70,6 +101,7 @@ $(function() {
         self.webcam_watermark = ko.observable(undefined);
         self.webcam_flipH = ko.observable(undefined);
         self.webcam_flipV = ko.observable(undefined);
+        self.webcam_rotate90 = ko.observable(undefined);
 
         self.feature_gcodeViewer = ko.observable(undefined);
         self.feature_temperatureGraph = ko.observable(undefined);
@@ -94,6 +126,7 @@ $(function() {
         self.serial_timeoutSdStatus = ko.observable(undefined);
         self.serial_log = ko.observable(undefined);
         self.serial_additionalPorts = ko.observable(undefined);
+        self.serial_longRunningCommands = ko.observable(undefined);
 
         self.folder_uploads = ko.observable(undefined);
         self.folder_timelapse = ko.observable(undefined);
@@ -107,7 +140,7 @@ $(function() {
         self.scripts_gcode_afterPrintPaused = ko.observable(undefined);
         self.scripts_gcode_beforePrintResumed = ko.observable(undefined);
         self.scripts_gcode_afterPrinterConnected = ko.observable(undefined);
-    
+
         self.temperature_profiles = ko.observableArray(undefined);
         self.temperature_cutoff = ko.observable(undefined);
 
@@ -139,11 +172,43 @@ $(function() {
 
         self.onStartup = function() {
             self.settingsDialog = $('#settings_dialog');
+            self.translationManagerDialog = $('#settings_appearance_managelanguagesdialog');
+            self.translationUploadElement = $("#settings_appearance_managelanguagesdialog_upload");
+            self.translationUploadButton = $("#settings_appearance_managelanguagesdialog_upload_start");
+
+            self.translationUploadElement.fileupload({
+                dataType: "json",
+                maxNumberOfFiles: 1,
+                autoUpload: false,
+                add: function(e, data) {
+                    if (data.files.length == 0) {
+                        return false;
+                    }
+
+                    self.translationUploadFilename(data.files[0].name);
+
+                    self.translationUploadButton.unbind("click");
+                    self.translationUploadButton.bind("click", function() {
+                        data.submit();
+                        return false;
+                    });
+                },
+                done: function(e, data) {
+                    self.translationUploadButton.unbind("click");
+                    self.translationUploadFilename(undefined);
+                    self.fromTranslationResponse(data.result);
+                },
+                fail: function(e, data) {
+                    self.translationUploadButton.unbind("click");
+                    self.translationUploadFilename(undefined);
+                }
+            });
         };
 
         self.onAllBound = function(allViewModels) {
             self.settingsDialog.on('show', function(event) {
                 if (event.target.id == "settings_dialog") {
+                    self.requestTranslationData();
                     _.each(allViewModels, function(viewModel) {
                         if (viewModel.hasOwnProperty("onSettingsShown")) {
                             viewModel.onSettingsShown();
@@ -181,6 +246,15 @@ $(function() {
             return false;
         };
 
+        self.hide = function() {
+            self.settingsDialog.modal("hide");
+        };
+
+        self.showTranslationManager = function() {
+            self.translationManagerDialog.modal();
+            return false;
+        };
+
         self.requestData = function(callback) {
             $.ajax({
                 url: API_BASEURL + "settings",
@@ -191,6 +265,75 @@ $(function() {
                     if (callback) callback();
                 }
             });
+        };
+
+        self.requestTranslationData = function(callback) {
+            $.ajax({
+                url: API_BASEURL + "languages",
+                type: "GET",
+                dataType: "json",
+                success: function(response) {
+                    self.fromTranslationResponse(response);
+                    if (callback) callback();
+                }
+            })
+        };
+
+        self.fromTranslationResponse = function(response) {
+            var translationsByLocale = {};
+            _.each(response.language_packs, function(item, key) {
+                _.each(item.languages, function(pack) {
+                    var locale = pack.locale;
+                    if (!_.has(translationsByLocale, locale)) {
+                        translationsByLocale[locale] = {
+                            locale: locale,
+                            display: pack.locale_display,
+                            english: pack.locale_english,
+                            packs: []
+                        };
+                    }
+
+                    translationsByLocale[locale]["packs"].push({
+                        identifier: key,
+                        display: item.display,
+                        pack: pack
+                    });
+                });
+            });
+
+            var translations = [];
+            _.each(translationsByLocale, function(item) {
+                item["packs"].sort(function(a, b) {
+                    if (a.identifier == "_core") return -1;
+                    if (b.identifier == "_core") return 1;
+
+                    if (a.display < b.display) return -1;
+                    if (a.display > b.display) return 1;
+                    return 0;
+                });
+                translations.push(item);
+            });
+
+            self.translations.updateItems(translations);
+        };
+
+        self.languagePackDisplay = function(item) {
+            return item.display + ((item.english != undefined) ? ' (' + item.english + ')' : '');
+        };
+
+        self.languagePacksAvailable = ko.computed(function() {
+            return self.translations.allSize() > 0;
+        });
+
+        self.deleteLanguagePack = function(locale, pack) {
+            $.ajax({
+                url: API_BASEURL + "languages/" + locale + "/" + pack,
+                type: "DELETE",
+                dataType: "json",
+                success: function(response) {
+                    self.fromTranslationResponse(response);
+                }
+            })
         };
 
         self.fromResponse = function(response) {
@@ -222,6 +365,7 @@ $(function() {
             self.webcam_watermark(response.webcam.watermark);
             self.webcam_flipH(response.webcam.flipH);
             self.webcam_flipV(response.webcam.flipV);
+            self.webcam_rotate90(response.webcam.rotate90);
 
             self.feature_gcodeViewer(response.feature.gcodeViewer);
             self.feature_temperatureGraph(response.feature.temperatureGraph);
@@ -246,6 +390,7 @@ $(function() {
             self.serial_timeoutSdStatus(response.serial.timeoutSdStatus);
             self.serial_log(response.serial.log);
             self.serial_additionalPorts(response.serial.additionalPorts.join("\n"));
+            self.serial_longRunningCommands(response.serial.longRunningCommands.join(", "));
 
             self.folder_uploads(response.folder.uploads);
             self.folder_timelapse(response.folder.timelapse);
@@ -261,7 +406,7 @@ $(function() {
             self.scripts_gcode_afterPrintPaused(response.scripts.gcode.afterPrintPaused);
             self.scripts_gcode_beforePrintResumed(response.scripts.gcode.beforePrintResumed);
             self.scripts_gcode_afterPrinterConnected(response.scripts.gcode.afterPrinterConnected);
-    
+
             self.temperature_profiles(response.temperature.profiles);
             self.temperature_cutoff(response.temperature.cutoff);
 
@@ -270,92 +415,90 @@ $(function() {
             self.terminalFilters(response.terminalFilters);
         };
 
-        self.saveData = function () {
+        self.saveData = function (data, successCallback) {
             self.settingsDialog.trigger("beforeSave");
 
-            var data = ko.mapping.toJS(self.settings);
+            if (data == undefined) {
+                data = ko.mapping.toJS(self.settings);
 
-            data = _.extend(data, {
-                "api" : {
-                    "enabled": self.api_enabled(),
-                    "key": self.api_key(),
-                    "allowCrossOrigin": self.api_allowCrossOrigin()
-                },
-                "appearance" : {
-                    "name": self.appearance_name(),
-                    "color": self.appearance_color(),
-                    "colorTransparent": self.appearance_colorTransparent(),
-                    "defaultLanguage": self.appearance_defaultLanguage()
-                },
-                "printer": {
-                    "defaultExtrusionLength": self.printer_defaultExtrusionLength()
-                },
-                "webcam": {
-                    "streamUrl": self.webcam_streamUrl(),
-                    "snapshotUrl": self.webcam_snapshotUrl(),
-                    "ffmpegPath": self.webcam_ffmpegPath(),
-                    "bitrate": self.webcam_bitrate(),
-                    "ffmpegThreads": self.webcam_ffmpegThreads(),
-                    "watermark": self.webcam_watermark(),
-                    "flipH": self.webcam_flipH(),
-                    "flipV": self.webcam_flipV()
-                },
-                "feature": {
-                    "gcodeViewer": self.feature_gcodeViewer(),
-                    "temperatureGraph": self.feature_temperatureGraph(),
-                    "waitForStart": self.feature_waitForStart(),
-                    "alwaysSendChecksum": self.feature_alwaysSendChecksum(),
-                    "sdSupport": self.feature_sdSupport(),
-                    "sdAlwaysAvailable": self.feature_sdAlwaysAvailable(),
-                    "swallowOkAfterResend": self.feature_swallowOkAfterResend(),
-                    "repetierTargetTemp": self.feature_repetierTargetTemp(),
-                    "externalHeatupDetection": !self.feature_disableExternalHeatupDetection(),
-                    "keyboardControl": self.feature_keyboardControl()
-                },
-                "serial": {
-                    "port": self.serial_port(),
-                    "baudrate": self.serial_baudrate(),
-                    "autoconnect": self.serial_autoconnect(),
-                    "timeoutConnection": self.serial_timeoutConnection(),
-                    "timeoutDetection": self.serial_timeoutDetection(),
-                    "timeoutCommunication": self.serial_timeoutCommunication(),
-                    "timeoutTemperature": self.serial_timeoutTemperature(),
-                    "timeoutSdStatus": self.serial_timeoutSdStatus(),
-                    "log": self.serial_log(),
-                    "additionalPorts": _.filter(
-                        _.map(
-                            self.serial_additionalPorts().split("\n"),
-                            function(item) { return (item) ? item.trim() : ""; }
-                        ),
-                        function(item) { return item && !_.startsWith(item, "#"); }
-                    )
-                },
-                "folder": {
-                    "uploads": self.folder_uploads(),
-                    "timelapse": self.folder_timelapse(),
-                    "timelapseTmp": self.folder_timelapseTmp(),
-                    "logs": self.folder_logs(),
-                    "watched": self.folder_watched()
-                },
-                "temperature": {
-                    "profiles": self.temperature_profiles(),
-                    "cutoff": self.temperature_cutoff()
-                },
-                "system": {
-                    "actions": self.system_actions()
-                },
-                "terminalFilters": self.terminalFilters(),
-                "scripts": {
-                    "gcode": {
-                        "beforePrintStarted": self.scripts_gcode_beforePrintStarted(),
-                        "afterPrintDone": self.scripts_gcode_afterPrintDone(),
-                        "afterPrintCancelled": self.scripts_gcode_afterPrintCancelled(),
-                        "afterPrintPaused": self.scripts_gcode_afterPrintPaused(),
-                        "beforePrintResumed": self.scripts_gcode_beforePrintResumed(),
-                        "afterPrinterConnected": self.scripts_gcode_afterPrinterConnected()
+                data = _.extend(data, {
+                    "api" : {
+                        "enabled": self.api_enabled(),
+                        "key": self.api_key(),
+                        "allowCrossOrigin": self.api_allowCrossOrigin()
+                    },
+                    "appearance" : {
+                        "name": self.appearance_name(),
+                        "color": self.appearance_color(),
+                        "colorTransparent": self.appearance_colorTransparent(),
+                        "defaultLanguage": self.appearance_defaultLanguage()
+                    },
+                    "printer": {
+                        "defaultExtrusionLength": self.printer_defaultExtrusionLength()
+                    },
+                    "webcam": {
+                        "streamUrl": self.webcam_streamUrl(),
+                        "snapshotUrl": self.webcam_snapshotUrl(),
+                        "ffmpegPath": self.webcam_ffmpegPath(),
+                        "bitrate": self.webcam_bitrate(),
+                        "ffmpegThreads": self.webcam_ffmpegThreads(),
+                        "watermark": self.webcam_watermark(),
+                        "flipH": self.webcam_flipH(),
+                        "flipV": self.webcam_flipV(),
+                        "rotate90": self.webcam_rotate90()
+                    },
+                    "feature": {
+                        "gcodeViewer": self.feature_gcodeViewer(),
+                        "temperatureGraph": self.feature_temperatureGraph(),
+                        "waitForStart": self.feature_waitForStart(),
+                        "alwaysSendChecksum": self.feature_alwaysSendChecksum(),
+                        "sdSupport": self.feature_sdSupport(),
+                        "sdAlwaysAvailable": self.feature_sdAlwaysAvailable(),
+                        "swallowOkAfterResend": self.feature_swallowOkAfterResend(),
+                        "repetierTargetTemp": self.feature_repetierTargetTemp(),
+                        "externalHeatupDetection": !self.feature_disableExternalHeatupDetection(),
+                        "keyboardControl": self.feature_keyboardControl()
+                    },
+                    "serial": {
+                        "port": self.serial_port(),
+                        "baudrate": self.serial_baudrate(),
+                        "autoconnect": self.serial_autoconnect(),
+                        "timeoutConnection": self.serial_timeoutConnection(),
+                        "timeoutDetection": self.serial_timeoutDetection(),
+                        "timeoutCommunication": self.serial_timeoutCommunication(),
+                        "timeoutTemperature": self.serial_timeoutTemperature(),
+                        "timeoutSdStatus": self.serial_timeoutSdStatus(),
+                        "log": self.serial_log(),
+                        "additionalPorts": commentableLinesToArray(self.serial_additionalPorts()),
+                        "longRunningCommands": splitTextToArray(self.serial_longRunningCommands(), ",", true)
+                    },
+                    "folder": {
+                        "uploads": self.folder_uploads(),
+                        "timelapse": self.folder_timelapse(),
+                        "timelapseTmp": self.folder_timelapseTmp(),
+                        "logs": self.folder_logs(),
+                        "watched": self.folder_watched()
+                    },
+                    "temperature": {
+                        "profiles": self.temperature_profiles(),
+                        "cutoff": self.temperature_cutoff()
+                    },
+                    "system": {
+                        "actions": self.system_actions()
+                    },
+                    "terminalFilters": self.terminalFilters(),
+                    "scripts": {
+                        "gcode": {
+                            "beforePrintStarted": self.scripts_gcode_beforePrintStarted(),
+                            "afterPrintDone": self.scripts_gcode_afterPrintDone(),
+                            "afterPrintCancelled": self.scripts_gcode_afterPrintCancelled(),
+                            "afterPrintPaused": self.scripts_gcode_afterPrintPaused(),
+                            "beforePrintResumed": self.scripts_gcode_beforePrintResumed(),
+                            "afterPrinterConnected": self.scripts_gcode_afterPrinterConnected()
+                        }
                     }
-                }
-            });
+                });
+            }
 
             $.ajax({
                 url: API_BASEURL + "settings",
@@ -365,7 +508,7 @@ $(function() {
                 data: JSON.stringify(data),
                 success: function(response) {
                     self.fromResponse(response);
-                    self.settingsDialog.modal("hide");
+                    if (successCallback) successCallback(response);
                 }
             });
         };

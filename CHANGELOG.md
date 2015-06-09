@@ -5,19 +5,16 @@
 ### New Features
 
 * Added internationalization of UI. Translations of OctoPrint are being crowd sourced via [Transifex](https://www.transifex.com/projects/p/octoprint/).
-  The following translations are already available with more in the works:
-  - Dutch (nl)
-  - German (de)
-  - French (fr)
-  - Hebrew (he)
-  - Norwegian (no)
-  - Romanian (ro)
+  Language Packs for both the core application as well as installed plugins can be uploaded through a new management
+  dialog in Settings > Appearance > Language Packs.
 * New file list: Pagination is gone, no more (mobile incompatible) pop overs, instead scrollable and with instant
   search
 * You can now define a folder (default: `~/.octoprint/watched`) to be watched for newly added GCODE (or -- if slicing
   support is enabled -- STL) files to automatically add.
-* OctoPrint now has a [plugin system](http://docs.octoprint.org/en/devel/plugins/index.html) which allows extending its 
-  core functionality.
+* OctoPrint now has a [plugin system](http://docs.octoprint.org/en/devel/plugins/index.html) which allows extending its
+  core functionality. Plugins may be installed through the new Plugin Manager available in OctoPrint's settings. This
+  Plugin Manager also allows browsing and easy installation of plugins registered on the official
+  [OctoPrint Plugin Repository](http://plugins.octoprint.org).
 * New type of API key: [App Session Keys](http://docs.octoprint.org/en/devel/api/apps.html) for trusted applications
 * Printer Profiles: Printer properties like print volume, extruder offsets etc are now managed via Printer Profiles. A
   connection to a printer will always have a printer profile associated.
@@ -39,6 +36,9 @@
 * Custom controls now support a row layout
 * Users can now define custom GCODE scripts to run upon starting/pausing/resuming/success/failure of a print or for
   custom controls ([#457](https://github.com/foosel/OctoPrint/issues/457), [#347](https://github.com/foosel/OctoPrint/issues/347))
+* Bundled [Software Update Plugin](https://github.com/foosel/OctoPrint/wiki/Plugin:-Software-Update) takes care of notifying about new OctoPrint releases and also allows
+  updating if configured as such. Plugins may register themselves with the update notification and application process
+  through a new hook ["octoprint.plugin.softwareupdate.check_config"]().
 
 ### Improvements
 
@@ -49,18 +49,18 @@
 * Start counting the layers at 1 instead of 0 in the GCODE viewer
 * Upgraded [Font Awesome](https://fortawesome.github.io/Font-Awesome/) to version 3.2.1
 * Better error reporting for timelapse rendering and system commands
-* Custom control can now be defined so that they show a Confirm dialog with configurable text before executing 
+* Custom control can now be defined so that they show a Confirm dialog with configurable text before executing
   ([#532](https://github.com/foosel/OctoPrint/issues/532) and [#590](https://github.com/foosel/OctoPrint/pull/590))
 * Slicing has been greatly improved:
-  * It now allows for a definition of slicing profiles to use for slicing plus overrides which can be defined per slicing 
+  * It now allows for a definition of slicing profiles to use for slicing plus overrides which can be defined per slicing
     job (defining overrides is not yet part of the UI but it's on the roadmap).
   * A new slicing dialog has been added which allows (re-)slicing uploaded STL files (which are now displayed in the file list
     as well). This dialog also allows specifying which action to take after slicing has been completed (none, selecting the
     sliced GCODE for printing or starting to print it directly)
-  * Slicers themselves are integrated into the system via ``SlicingPlugins``. 
-  * The [Cura integration](https://github.com/daid/Cura) has changed in such a way that OctoPrint now calls the 
-    [CuraEngine](https://github.com/Ultimaker/CuraEngine) directly instead of depending on the full Cura installation. See 
-    [the wiki](https://github.com/foosel/OctoPrint/wiki/Plugin:-Cura) for instructions on how to change your setup to 
+  * Slicers themselves are integrated into the system via ``SlicingPlugins``.
+  * The [Cura integration](https://github.com/daid/Cura) has changed in such a way that OctoPrint now calls the
+    [CuraEngine](https://github.com/Ultimaker/CuraEngine) directly instead of depending on the full Cura installation. See
+    [the wiki](https://github.com/foosel/OctoPrint/wiki/Plugin:-Cura) for instructions on how to change your setup to
     accommodate the new integration.
   * The "Slicing done" notification is now colored green ([#558](https://github.com/foosel/OctoPrint/issues/558)).
   * The slicing API allows positioning the model to slice on the print bed (Note: this is not yet available in the UI).
@@ -111,15 +111,15 @@
   NTP server on a Raspberry Pi image. Achieved through monkey patching Tornado with
   [this PR](https://github.com/tornadoweb/tornado/pull/1290).
 * Serial ports matching ``/dev/ttyAMA*`` are not anymore listed by default (this was the reason for a lot of people
-  running into problems while attempting to connect to their printer on their Raspberry Pis, on which ``/dev/ttyAMA0`` 
-  is the OS's serial console by default). Added configuration of additional ports to the Serial Connection section in 
+  running into problems while attempting to connect to their printer on their Raspberry Pis, on which ``/dev/ttyAMA0``
+  is the OS's serial console by default). Added configuration of additional ports to the Serial Connection section in
   the Settings to make it easier for those people who do indeed have their printer connected to ``/dev/ttyAMA0``.
-* Better behaviour of the settings dialog on low-width devices, navigation and content also now scroll independently 
+* Better behaviour of the settings dialog on low-width devices, navigation and content also now scroll independently
   from each other (see also [#823](https://github.com/foosel/OctoPrint/pull/823))
 * Renamed "Temperature Timeout" and "SD Status Timeout" in Settings to "Temperature Interval" and "SD Status Interval"
   to better reflect what those values are actually used for.
 * Better behaviour of the settings dialog on mobile devices.
-* Added support for rectangular printer beds with the origin in the center ([#682](https://github.com/foosel/OctoPrint/issues/682) 
+* Added support for rectangular printer beds with the origin in the center ([#682](https://github.com/foosel/OctoPrint/issues/682)
   and [#852](https://github.com/foosel/OctoPrint/pull/852)). Printer profiles now contain a new settings ``volume.origin``
   which can either be ``lowerleft`` or ``center``. For circular beds only ``center`` is supported.
 * Made baudrate detection a bit more solid, still can't perform wonders.
@@ -129,16 +129,20 @@
   data points. Anything older than ``n`` minutes will be cut off, with ``n`` defaulting to 30min. This value can be
   changed under "Temperatures" in the Settings ([#343](https://github.com/foosel/OctoPrint/issues/343)).
 * High-DPI support for the GCode viewer ([#837](https://github.com/foosel/OctoPrint/issues/837)).
-* Stop websocket connections from multiplying([#888](https://github.com/foosel/OctoPrint/pull/888)).
+* Stop websocket connections from multiplying ([#888](https://github.com/foosel/OctoPrint/pull/888)).
+* New setting to rotate webcam by 90° counter clockwise ([#895](https://github.com/foosel/OctoPrint/issues/895) and
+  [#906](https://github.com/foosel/OctoPrint/pull/906))
 
 ### Bug Fixes
 
 * [#435](https://github.com/foosel/OctoPrint/issues/435) - Always interpret negative duration (e.g. for print time left)
   as 0
-* [#633](https://github.com/foosel/OctoPrint/issues/633) - Correctly interpret temperature lines from multi extruder 
-  setups under Smoothieware
+* [#516](https://github.com/foosel/OctoPrint/issues/516) - Also require API key even if ACL is disabled.
 * [#556](https://github.com/foosel/OctoPrint/issues/556) - Allow login of the same user from multiple browsers without
   side effects
+* [#612](https://github.com/foosel/OctoPrint/issues/612) - Fixed GCODE viewer in zoomed out browsers
+* [#633](https://github.com/foosel/OctoPrint/issues/633) - Correctly interpret temperature lines from multi extruder
+  setups under Smoothieware
 * [#680](https://github.com/foosel/OctoPrint/issues/680) - Don't accidentally include a newline from the MIME headers
   in the parsed multipart data from file uploads
 * [#709](https://github.com/foosel/OctoPrint/issues/709) - Properly initialize time estimation for SD card transfers too
@@ -153,7 +157,8 @@
   ``python setup.py sdist``
 * [#330](https://github.com/foosel/OctoPrint/issues/330) - Ping pong sending to fix potential acknowledgement errors.
   Also affects [#166](https://github.com/foosel/OctoPrint/issues/166), [#470](https://github.com/foosel/OctoPrint/issues/470)
-  and [#490](https://github.com/foosel/OctoPrint/issues/490).
+  and [#490](https://github.com/foosel/OctoPrint/issues/490). A big thank you to all people involved in these tickets
+  in getting to the ground of this.
 * [#825](https://github.com/foosel/OctoPrint/issues/825) - Fixed "please visualize" button of large GCODE files
 * Various fixes of bugs in newly introduced features and improvements:
   * [#625](https://github.com/foosel/OctoPrint/pull/625) - Newly added GCODE files were not being added to the analysis
@@ -183,6 +188,12 @@
   * [#809](https://github.com/foosel/OctoPrint/issues/809) - Added proper form validation to printer profile editor
   * [#824](https://github.com/foosel/OctoPrint/issues/824) - Settings getting lost when switching between panes in
     the settings dialog (fix provided by [#879](https://github.com/foosel/OctoPrint/pull/879))
+  * [#892](https://github.com/foosel/OctoPrint/issues/892) - Preselected baudrate is now properly used for auto detected
+    serial ports
+  * [#909](https://github.com/foosel/OctoPrint/issues/909) - Fixed Z-Timelapse for Z changes on ``G1`` moves.
+  * Fixed another instance of a missing `branch` field in version dicts generated by versioneer (compare
+    [#634](https://github.com/foosel/OctoPrint/pull/634)). Caused an issue when installing from source archive
+    downloaded from Github.
 * Various fixes without tickets:
   * GCODE viewer now doesn't stumble over completely extrusionless GCODE files
   * Do not deliver the API key on settings API unless user has admin rights
@@ -195,21 +206,12 @@
   * Fixed handling of SD card files in folders
   * Fixed refreshing of timelapse file list upon finished rendering of a new one
   * Fixed ``/api/printer`` which wasn't adapter yet to new internal offset data model
-  * Made initial connection to printer a bit more responsive: Having to wait for the first serial timeout before sending 
-    the first ``M105`` even when not waiting for seeing a "start" caused unnecessary wait times for reaching the 
+  * Made initial connection to printer a bit more responsive: Having to wait for the first serial timeout before sending
+    the first ``M105`` even when not waiting for seeing a "start" caused unnecessary wait times for reaching the
     "Operational" state.
+  * Log cancelled prints only once (thanks to @imrahil for the headsup)
 
 ([Commits](https://github.com/foosel/OctoPrint/compare/master...devel))
-
-## 1.1.3 (unreleased)
-
-### Bug Fixes
-
-* Fixed another instance of a missing `branch` fields in version dicts generated by versioneer (compare 
-  [#634](https://github.com/foosel/OctoPrint/pull/634)). Caused an issue when installing from source archive
-  downloaded from Github.
-  
-([Commits](https://github.com/foosel/OctoPrint/compare/1.1.2...master))
 
 ## 1.1.2 (2015-03-23)
 
@@ -271,7 +273,7 @@
 
 ### New Features
 
-* New REST API, including User API Keys additionally to the global API key. Please note that **this will break existing 
+* New REST API, including User API Keys additionally to the global API key. Please note that **this will break existing
   API clients** as it replaces the old API (same endpoint). You can find the documentation of the new API at
   [docs.octoprint.org](http://docs.octoprint.org/en/1.1.0/api/index.html).
 * New Event structure allows more flexibility regarding payload data, configuration files will be migrated automatically.
@@ -296,9 +298,9 @@
 * The dimensions of the print bed can now be configured via the Settings ([#396](https://github.com/foosel/OctoPrint/pull/396))
 * Target temperature reporting format of Repetier Firmware is now supported as well ([360](https://github.com/foosel/OctoPrint/issues/360))
 * Version tracking now based on git tagging and [versioneer](https://github.com/warner/python-versioneer/). Version number,
-  git commit and branch get reported in the format `<version tag>-<commits since then>-g<commit hash> (<branch> branch)`, 
+  git commit and branch get reported in the format `<version tag>-<commits since then>-g<commit hash> (<branch> branch)`,
   e.g. `1.2.0-dev-172-ga48b5de (devel branch)`.
-* Made "Center viewport on model" and "Zoom in on model" in the GCODE viewer automatically deselect and de-apply if 
+* Made "Center viewport on model" and "Zoom in on model" in the GCODE viewer automatically deselect and de-apply if
   viewport gets manipulated by the user ([#398](https://github.com/foosel/OctoPrint/issues/398))
 * GCODE viewer now interprets inverted axes for printer control and mirrors print bed accordingly ([#431](https://github.com/foosel/OctoPrint/issues/431))
 * Added `clean` command to `setup.py`, removes old build artifacts (mostly interesting for developers)
@@ -317,7 +319,7 @@
 * [#381](https://github.com/foosel/OctoPrint/issues/381) - Only list those SD files that have an ASCII filename
 * Fixed a race condition that could occur when pressing "Print" (File not opened yet, but attempt to read from it)
 * [#398](https://github.com/foosel/OctoPrint/issues/398) - Fixed interfering options in GCODE viewer
-* [#399](https://github.com/foosel/OctoPrint/issues/399) & [360](https://github.com/foosel/OctoPrint/issues/360) - Leave 
+* [#399](https://github.com/foosel/OctoPrint/issues/399) & [360](https://github.com/foosel/OctoPrint/issues/360) - Leave
   bed temperature unset when not detected (instead of dying a horrible death)
 * [#492](https://github.com/foosel/OctoPrint/issues/492) - Fixed a race condition which could lead to an attempt to read
   from an already closed serial port, causing an error to be displayed to the user

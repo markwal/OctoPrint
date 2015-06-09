@@ -249,6 +249,17 @@ The following settings are only relevant to you if you want to do OctoPrint deve
      # Developers may specify less here too.
      stylesheet: css
 
+     # Settings for OctoPrint's web asset merging and minifying
+     webassets:
+       # If set to true, OctoPrint will merge all JS, all CSS and all Less files into one file per type
+       # to reduce request count. Setting it to false will load all assets individually. Note: if this is set to
+       # false, no minification will take place regardless of the minify setting below.
+       bundle: true
+
+       # If set to true, OctoPrint will minify its viewmodels (that includes those of plugins). Note: if bundle is
+       # set to false, no minification will take place either.
+       minify: true
+
      # Settings for the virtual printer
      virtualPrinter:
 
@@ -718,6 +729,15 @@ OctoPrint is running is allowed to do this without password entry:
        action: shutdown
        command: sudo shutdown -h now
        confirm: You are about to shutdown the system.
+
+You can also add an divider by setting action to divider like this:
+
+.. code-block:: yaml
+
+   system:
+     actions:
+     - action: divider
+
 
 .. _sec-configuration-config_yaml-temperature:
 

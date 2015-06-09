@@ -53,7 +53,8 @@ def getSettings():
 			"ffmpegThreads": s.get(["webcam", "ffmpegThreads"]),
 			"watermark": s.getBoolean(["webcam", "watermark"]),
 			"flipH": s.getBoolean(["webcam", "flipH"]),
-			"flipV": s.getBoolean(["webcam", "flipV"])
+			"flipV": s.getBoolean(["webcam", "flipV"]),
+			"rotate90": s.getBoolean(["webcam", "rotate90"])
 		},
 		"feature": {
 			"gcodeViewer": s.getBoolean(["gcodeViewer", "enabled"]),
@@ -79,7 +80,8 @@ def getSettings():
 			"timeoutTemperature": s.getFloat(["serial", "timeout", "temperature"]),
 			"timeoutSdStatus": s.getFloat(["serial", "timeout", "sdStatus"]),
 			"log": s.getBoolean(["serial", "log"]),
-			"additionalPorts": s.get(["serial", "additionalPorts"])
+			"additionalPorts": s.get(["serial", "additionalPorts"]),
+			"longRunningCommands": s.get(["serial", "longRunningCommands"])
 		},
 		"folder": {
 			"uploads": s.getBaseFolder("uploads"),
@@ -167,6 +169,7 @@ def setSettings():
 		if "watermark" in data["webcam"].keys(): s.setBoolean(["webcam", "watermark"], data["webcam"]["watermark"])
 		if "flipH" in data["webcam"].keys(): s.setBoolean(["webcam", "flipH"], data["webcam"]["flipH"])
 		if "flipV" in data["webcam"].keys(): s.setBoolean(["webcam", "flipV"], data["webcam"]["flipV"])
+		if "rotate90" in data["webcam"].keys(): s.setBoolean(["webcam", "rotate90"], data["webcam"]["rotate90"])
 
 	if "feature" in data.keys():
 		if "gcodeViewer" in data["feature"].keys(): s.setBoolean(["gcodeViewer", "enabled"], data["feature"]["gcodeViewer"])
@@ -190,6 +193,7 @@ def setSettings():
 		if "timeoutTemperature" in data["serial"].keys(): s.setFloat(["serial", "timeout", "temperature"], data["serial"]["timeoutTemperature"])
 		if "timeoutSdStatus" in data["serial"].keys(): s.setFloat(["serial", "timeout", "sdStatus"], data["serial"]["timeoutSdStatus"])
 		if "additionalPorts" in data["serial"] and isinstance(data["serial"]["additionalPorts"], (list, tuple)): s.set(["serial", "additionalPorts"], data["serial"]["additionalPorts"])
+		if "longRunningCommands" in data["serial"] and isinstance(data["serial"]["longRunningCommands"], (list, tuple)): s.set(["serial", "longRunningCommands"], data["serial"]["longRunningCommands"])
 
 		oldLog = s.getBoolean(["serial", "log"])
 		if "log" in data["serial"].keys(): s.setBoolean(["serial", "log"], data["serial"]["log"])

@@ -7,10 +7,11 @@ __copyright__ = "Copyright (C) 2014 The OctoPrint Project - Released under terms
 
 import uuid
 from sockjs.tornado import SockJSRouter
-from flask import Flask, render_template, send_from_directory, g, request, make_response, session, url_for
+from flask import Flask, g, request, session, Blueprint
 from flask.ext.login import LoginManager, current_user
 from flask.ext.principal import Principal, Permission, RoleNeed, identity_loaded, UserNeed
 from flask.ext.babel import Babel, gettext, ngettext
+from flask.ext.assets import Environment, Bundle
 from babel import Locale
 from watchdog.observers import Observer
 from collections import defaultdict
@@ -24,7 +25,8 @@ SUCCESS = {}
 NO_CONTENT = ("", 204)
 
 app = Flask("octoprint")
-babel = Babel(app)
+assets = None
+babel = None
 debug = False
 
 printer = None
@@ -37,6 +39,7 @@ eventManager = None
 loginManager = None
 pluginManager = None
 appSessionManager = None
+pluginLifecycleManager = None
 
 principals = Principal(app)
 admin_permission = Permission(RoleNeed("admin"))
@@ -58,9 +61,6 @@ import octoprint.filemanager.analysis
 import octoprint.slicing
 
 from . import util
-util.tornado.fix_ioloop_scheduling()
-util.flask.enable_plugin_translations()
-
 
 UI_API_KEY = ''.join('%02X' % ord(z) for z in uuid.uuid4().bytes)
 
@@ -70,431 +70,8 @@ BRANCH = versions['branch'] if 'branch' in versions else None
 DISPLAY_VERSION = "%s (%s branch)" % (VERSION, BRANCH) if BRANCH else VERSION
 del versions
 
-
-def get_available_locale_identifiers(locales):
-	result = set()
-
-	# add available translations
-	for locale in locales:
-		result.add(locale.language)
-		if locale.territory:
-			# if a territory is specified, add that too
-			result.add("%s_%s" % (locale.language, locale.territory))
-
-	return result
-
-
-LOCALES = [Locale.parse("en")] + babel.list_translations()
-LANGUAGES = get_available_locale_identifiers(LOCALES)
-
-
-@app.before_request
-def before_request():
-	g.locale = get_locale()
-
-@app.after_request
-def after_request(response):
-	# send no-cache headers with all POST responses
-	if request.method == "POST":
-		response.cache_control.no_cache = True
-	response.headers.add("X-Clacks-Overhead", "GNU Terry Pratchett")
-	return response
-
-
-@babel.localeselector
-def get_locale():
-	if "l10n" in request.values:
-		return Locale.negotiate([request.values["l10n"]], LANGUAGES)
-
-	if hasattr(g, "identity") and g.identity and userManager is not None:
-		userid = g.identity.id
-		try:
-			user_language = userManager.getUserSetting(userid, ("interface", "language"))
-			if user_language is not None and not user_language == "_default":
-				return Locale.negotiate([user_language], LANGUAGES)
-		except octoprint.users.UnknownUser:
-			pass
-
-	default_language = settings().get(["appearance", "defaultLanguage"])
-	if default_language is not None and not default_language == "_default" and default_language in LANGUAGES:
-		return Locale.negotiate([default_language], LANGUAGES)
-
-	return request.accept_languages.best_match(LANGUAGES)
-
-
-@app.route("/")
-@util.flask.cached(refreshif=lambda: util.flask.cache_check_headers() or "_refresh" in request.values, key=lambda: "view/%s/%s" % (request.path, g.locale))
-def index():
-
-	#~~ a bunch of settings
-
-	enable_gcodeviewer = settings().getBoolean(["gcodeViewer", "enabled"])
-	enable_timelapse = (settings().get(["webcam", "snapshot"]) and settings().get(["webcam", "ffmpeg"]))
-	enable_systemmenu = settings().get(["system"]) is not None and settings().get(["system", "actions"]) is not None and len(settings().get(["system", "actions"])) > 0
-	enable_accesscontrol = userManager is not None
-	preferred_stylesheet = settings().get(["devel", "stylesheet"])
-	locales = dict((l.language, dict(language=l.language, display=l.display_name, english=l.english_name)) for l in LOCALES)
-
-#~~ prepare assets
-
-	supported_stylesheets = ("css", "less")
-	assets = dict(
-		js=[],
-		stylesheets=[]
-	)
-	assets["js"] = [
-		url_for('static', filename='js/app/viewmodels/appearance.js'),
-		url_for('static', filename='js/app/viewmodels/connection.js'),
-		url_for('static', filename='js/app/viewmodels/control.js'),
-		url_for('static', filename='js/app/viewmodels/firstrun.js'),
-		url_for('static', filename='js/app/viewmodels/files.js'),
-		url_for('static', filename='js/app/viewmodels/loginstate.js'),
-		url_for('static', filename='js/app/viewmodels/navigation.js'),
-		url_for('static', filename='js/app/viewmodels/printerstate.js'),
-		url_for('static', filename='js/app/viewmodels/printerprofiles.js'),
-		url_for('static', filename='js/app/viewmodels/settings.js'),
-		url_for('static', filename='js/app/viewmodels/slicing.js'),
-		url_for('static', filename='js/app/viewmodels/temperature.js'),
-		url_for('static', filename='js/app/viewmodels/terminal.js'),
-		url_for('static', filename='js/app/viewmodels/users.js'),
-		url_for('static', filename='js/app/viewmodels/log.js'),
-		url_for('static', filename='js/app/viewmodels/usersettings.js')
-	]
-	if enable_gcodeviewer:
-		assets["js"] += [
-			url_for('static', filename='js/app/viewmodels/gcode.js'),
-			url_for('static', filename='gcodeviewer/js/ui.js'),
-			url_for('static', filename='gcodeviewer/js/gCodeReader.js'),
-			url_for('static', filename='gcodeviewer/js/renderer.js')
-		]
-	if enable_timelapse:
-		assets["js"].append(url_for('static', filename='js/app/viewmodels/timelapse.js'))
-
-	if preferred_stylesheet == "less":
-		assets["stylesheets"].append(("less", url_for('static', filename='less/octoprint.less')))
-	elif preferred_stylesheet == "css":
-		assets["stylesheets"].append(("css", url_for('static', filename='css/octoprint.css')))
-
-	asset_plugins = pluginManager.get_implementations(octoprint.plugin.AssetPlugin)
-	for implementation in asset_plugins:
-		name = implementation._identifier
-		all_assets = implementation.get_assets()
-
-		if "js" in all_assets:
-			for asset in all_assets["js"]:
-				assets["js"].append(url_for('plugin_assets', name=name, filename=asset))
-
-		if preferred_stylesheet in all_assets:
-			for asset in all_assets[preferred_stylesheet]:
-				assets["stylesheets"].append((preferred_stylesheet, url_for('plugin_assets', name=name, filename=asset)))
-		else:
-			for stylesheet in supported_stylesheets:
-				if not stylesheet in all_assets:
-					continue
-
-				for asset in all_assets[stylesheet]:
-					assets["stylesheets"].append((stylesheet, url_for('plugin_assets', name=name, filename=asset)))
-				break
-
-	##~~ prepare templates
-
-	templates = dict(
-		navbar=dict(order=[], entries=dict()),
-		sidebar=dict(order=[], entries=dict()),
-		tab=dict(order=[], entries=dict()),
-		settings=dict(order=[], entries=dict()),
-		usersettings=dict(order=[], entries=dict()),
-		generic=dict(order=[], entries=dict())
-	)
-	template_types = templates.keys()
-
-	# navbar
-
-	templates["navbar"]["entries"] = dict(
-		settings=dict(template="navbar/settings.jinja2", _div="navbar_settings", styles=["display: none"], data_bind="visible: loginState.isAdmin")
-	)
-	if enable_accesscontrol:
-		templates["navbar"]["entries"]["login"] = dict(template="navbar/login.jinja2", _div="navbar_login", classes=["dropdown"], custom_bindings=False)
-	if enable_systemmenu:
-		templates["navbar"]["entries"]["systemmenu"] = dict(template="navbar/systemmenu.jinja2", _div="navbar_systemmenu", styles=["display: none"], classes=["dropdown"], data_bind="visible: loginState.isAdmin", custom_bindings=False)
-
-	# sidebar
-
-	templates["sidebar"]["entries"]= dict(
-		connection=(gettext("Connection"), dict(template="sidebar/connection.jinja2", _div="connection", icon="signal", styles_wrapper=["display: none"], data_bind="visible: loginState.isAdmin")),
-		state=(gettext("State"), dict(template="sidebar/state.jinja2", _div="state", icon="info-sign")),
-		files=(gettext("Files"), dict(template="sidebar/files.jinja2", _div="files", icon="list", classes_content=["overflow_visible"], template_header="sidebar/files_header.jinja2"))
-	)
-
-	# tabs
-
-	templates["tab"]["entries"] = dict(
-		temperature=(gettext("Temperature"), dict(template="tabs/temperature.jinja2", _div="temp")),
-		control=(gettext("Control"), dict(template="tabs/control.jinja2", _div="control")),
-		terminal=(gettext("Terminal"), dict(template="tabs/terminal.jinja2", _div="term")),
-	)
-	if enable_gcodeviewer:
-		templates["tab"]["entries"]["gcodeviewer"] = (gettext("GCode Viewer"), dict(template="tabs/gcodeviewer.jinja2", _div="gcode"))
-	if enable_timelapse:
-		templates["tab"]["entries"]["timelapse"] = (gettext("Timelapse"), dict(template="tabs/timelapse.jinja2", _div="timelapse"))
-
-	# settings dialog
-
-	templates["settings"]["entries"] = dict(
-		section_printer=(gettext("Printer"), None),
-
-		serial=(gettext("Serial Connection"), dict(template="dialogs/settings/serialconnection.jinja2", _div="settings_serialConnection", custom_bindings=False)),
-		printerprofiles=(gettext("Printer Profiles"), dict(template="dialogs/settings/printerprofiles.jinja2", _div="settings_printerProfiles", custom_bindings=False)),
-		temperatures=(gettext("Temperatures"), dict(template="dialogs/settings/temperatures.jinja2", _div="settings_temperature", custom_bindings=False)),
-		terminalfilters=(gettext("Terminal Filters"), dict(template="dialogs/settings/terminalfilters.jinja2", _div="settings_terminalFilters", custom_bindings=False)),
-		gcodescripts=(gettext("GCODE Scripts"), dict(template="dialogs/settings/gcodescripts.jinja2", _div="settings_gcodeScripts", custom_bindings=False)),
-
-		section_features=(gettext("Features"), None),
-
-		features=(gettext("Features"), dict(template="dialogs/settings/features.jinja2", _div="settings_features", custom_bindings=False)),
-		webcam=(gettext("Webcam"), dict(template="dialogs/settings/webcam.jinja2", _div="settings_webcam", custom_bindings=False)),
-		api=(gettext("API"), dict(template="dialogs/settings/api.jinja2", _div="settings_api", custom_bindings=False)),
-
-		section_octoprint=(gettext("OctoPrint"), None),
-
-		folders=(gettext("Folders"), dict(template="dialogs/settings/folders.jinja2", _div="settings_folders", custom_bindings=False)),
-		appearance=(gettext("Appearance"), dict(template="dialogs/settings/appearance.jinja2", _div="settings_appearance", custom_bindings=False)),
-		logs=(gettext("Logs"), dict(template="dialogs/settings/logs.jinja2", _div="settings_logs")),
-	)
-	if enable_accesscontrol:
-		templates["settings"]["entries"]["accesscontrol"] = (gettext("Access Control"), dict(template="dialogs/settings/accesscontrol.jinja2", _div="settings_users", custom_bindings=False))
-
-	# user settings dialog
-
-	if enable_accesscontrol:
-		templates["usersettings"]["entries"] = dict(
-			access=(gettext("Access"), dict(template="dialogs/usersettings/access.jinja2", _div="usersettings_access", custom_bindings=False)),
-			interface=(gettext("Interface"), dict(template="dialogs/usersettings/interface.jinja2", _div="usersettings_interface", custom_bindings=False)),
-		)
-
-	# extract data from template plugins
-
-	template_plugins = pluginManager.get_implementations(octoprint.plugin.TemplatePlugin)
-
-	# rules for transforming template configs to template entries
-	rules = dict(
-		navbar=dict(div=lambda x: "navbar_plugin_" + x, template=lambda x: x + "_navbar.jinja2", to_entry=lambda data: data),
-		sidebar=dict(div=lambda x: "sidebar_plugin_" + x, template=lambda x: x + "_sidebar.jinja2", to_entry=lambda data: (data["name"], data)),
-		tab=dict(div=lambda x: "tab_plugin_" + x, template=lambda x: x + "_tab.jinja2", to_entry=lambda data: (data["name"], data)),
-		settings=dict(div=lambda x: "settings_plugin_" + x, template=lambda x: x + "_settings.jinja2", to_entry=lambda data: (data["name"], data)),
-		usersettings=dict(div=lambda x: "usersettings_plugin_" + x, template=lambda x: x + "_usersettings.jinja2", to_entry=lambda data: (data["name"], data)),
-		generic=dict(template=lambda x: x + ".jinja2", to_entry=lambda data: data)
-	)
-
-	plugin_vars = dict()
-	plugin_names = set()
-	for implementation in template_plugins:
-		name = implementation._identifier
-		plugin_names.add(name)
-
-		vars = implementation.get_template_vars()
-		if not isinstance(vars, dict):
-			vars = dict()
-
-		for var_name, var_value in vars.items():
-			plugin_vars["plugin_" + name + "_" + var_name] = var_value
-
-		configs = implementation.get_template_configs()
-		if not isinstance(configs, (list, tuple)):
-			configs = []
-
-		includes = _process_template_configs(name, implementation, configs, rules)
-
-		for t in template_types:
-			for include in includes[t]:
-				if t == "navbar" or t == "generic":
-					data = include
-				else:
-					data = include[1]
-
-				key = data["_key"]
-				if "replaces" in data:
-					key = data["replaces"]
-				templates[t]["entries"][key] = include
-
-	#~~ order internal templates and plugins
-
-	# make sure that
-	# 1) we only have keys in our ordered list that we have entries for and
-	# 2) we have all entries located somewhere within the order
-
-	for t in template_types:
-		default_order = settings().get(["appearance", "components", "order", t], merged=True, config=dict())
-		configured_order = settings().get(["appearance", "components", "order", t], merged=True)
-		configured_disabled = settings().get(["appearance", "components", "disabled", t])
-
-		# first create the ordered list of all component ids according to the configured order
-		templates[t]["order"] = [x for x in configured_order if x in templates[t]["entries"] and not x in configured_disabled]
-
-		# now append the entries from the default order that are not already in there
-		templates[t]["order"] += [x for x in default_order if not x in templates[t]["order"] and x in templates[t]["entries"] and not x in configured_disabled]
-
-		all_ordered = set(templates[t]["order"])
-		all_disabled = set(configured_disabled)
-
-		# check if anything is missing, if not we are done here
-		missing_in_order = set(templates[t]["entries"].keys()).difference(all_ordered).difference(all_disabled)
-		if len(missing_in_order) == 0:
-			continue
-
-		# finally add anything that's not included in our order yet
-		sorted_missing = list(missing_in_order)
-		if not t == "navbar" and not t == "generic":
-			# anything but navbar and generic components get sorted by their name
-			sorted_missing = sorted(missing_in_order, key=lambda x: templates[t]["entries"][x][0])
-
-		if t == "navbar":
-			# additional navbar components are prepended
-			templates[t]["order"] = sorted_missing + templates[t]["order"]
-		elif t == "sidebar" or t == "tab" or t == "generic" or t == "usersettings":
-			# additional sidebar, generic or usersettings components are appended
-			templates[t]["order"] += sorted_missing
-		elif t == "settings":
-			# additional settings items are added to the plugin section
-			templates[t]["entries"]["section_plugins"] = (gettext("Plugins"), None)
-			templates[t]["order"] += ["section_plugins"] + sorted_missing
-
-	#~~ prepare full set of template vars for rendering
-
-	render_kwargs = dict(
-		webcamStream=settings().get(["webcam", "stream"]),
-		enableTemperatureGraph=settings().get(["feature", "temperatureGraph"]),
-		enableAccessControl=userManager is not None,
-		enableSdSupport=settings().get(["feature", "sdSupport"]),
-		firstRun=settings().getBoolean(["server", "firstRun"]) and (userManager is None or not userManager.hasBeenCustomized()),
-		debug=debug,
-		version=VERSION,
-		display_version=DISPLAY_VERSION,
-		gcodeMobileThreshold=settings().get(["gcodeViewer", "mobileSizeThreshold"]),
-		gcodeThreshold=settings().get(["gcodeViewer", "sizeThreshold"]),
-		uiApiKey=UI_API_KEY,
-		templates=templates,
-		assets=assets,
-		pluginNames=plugin_names,
-		locales=locales
-	)
-	render_kwargs.update(plugin_vars)
-
-	#~~ render!
-
-	return render_template(
-		"index.jinja2",
-		**render_kwargs
-	)
-
-
-def _process_template_configs(name, implementation, configs, rules):
-	from jinja2.exceptions import TemplateNotFound
-
-	counters = dict(
-		navbar=1,
-		sidebar=1,
-		tab=1,
-		settings=1,
-		generic=1
-	)
-	includes = defaultdict(list)
-
-	for config in configs:
-		if not isinstance(config, dict):
-			continue
-		if not "type" in config:
-			continue
-
-		template_type = config["type"]
-		del config["type"]
-
-		if not template_type in rules:
-			continue
-		rule = rules[template_type]
-
-		data = _process_template_config(name, implementation, rule, config=config, counter=counters[template_type])
-		if data is None:
-			continue
-
-		includes[template_type].append(rule["to_entry"](data))
-		counters[template_type] += 1
-
-	for template_type in rules:
-		if len(includes[template_type]) == 0:
-			# if no template of that type was added by the config, we'll try to use the default template name
-			rule = rules[template_type]
-			data = _process_template_config(name, implementation, rule)
-			if data is not None:
-				try:
-					app.jinja_env.get_or_select_template(data["template"])
-				except TemplateNotFound:
-					pass
-				else:
-					includes[template_type].append(rule["to_entry"](data))
-
-	return includes
-
-def _process_template_config(name, implementation, rule, config=None, counter=1):
-	if "mandatory" in rule:
-		for mandatory in rule["mandatory"]:
-			if not mandatory in config:
-				return None
-
-	if config is None:
-		config = dict()
-	data = dict(config)
-
-	if not "suffix" in data and counter > 1:
-		data["suffix"] = "_%d" % counter
-
-	if "div" in data:
-		data["_div"] = data["div"]
-	elif "div" in rule:
-		data["_div"] = rule["div"](name)
-		if "suffix" in data:
-			data["_div"] = data["_div"] + data["suffix"]
-
-	if not "template" in data:
-		data["template"] = rule["template"](name)
-
-	if not "name" in data:
-		data["name"] = implementation._plugin_name
-
-	if not "custom_bindings" in data or data["custom_bindings"]:
-		data_bind = "allowBindings: true"
-		if "data_bind" in data:
-			data_bind = data_bind + ", " + data["data_bind"]
-		data["data_bind"] = data_bind
-
-	data["_key"] = "plugin_" + name
-	if "suffix" in data:
-		data["_key"] += data["suffix"]
-
-	return data
-
-@app.route("/robots.txt")
-def robotsTxt():
-	return send_from_directory(app.static_folder, "robots.txt")
-
-
-@app.route("/plugin_assets/<string:name>/<path:filename>")
-def plugin_assets(name, filename):
-	asset_plugins = pluginManager.get_filtered_implementations(lambda p: p._identifier == name, octoprint.plugin.AssetPlugin)
-
-	if not asset_plugins:
-		return make_response("Asset not found", 404)
-
-	if len(asset_plugins) > 1:
-		return make_response("More than one asset provider for {name}, can't proceed".format(name=name), 500)
-
-	asset_plugin = asset_plugins[0]
-	asset_folder = asset_plugin.get_asset_folder()
-	if asset_folder is None:
-		return make_response("Asset not found", 404)
-
-	return send_from_directory(asset_folder, filename)
-
+LOCALES = []
+LANGUAGES = set()
 
 @identity_loaded.connect_via(app)
 def on_identity_loaded(sender, identity):
@@ -507,7 +84,6 @@ def on_identity_loaded(sender, identity):
 		identity.provides.add(RoleNeed("user"))
 	if user.is_admin():
 		identity.provides.add(RoleNeed("admin"))
-
 
 def load_user(id):
 	if id == "_api":
@@ -550,6 +126,9 @@ class Server():
 		if not self._allowRoot:
 			self._check_for_root()
 
+		global app
+		global babel
+
 		global printer
 		global printerProfileManager
 		global fileManager
@@ -560,17 +139,28 @@ class Server():
 		global loginManager
 		global pluginManager
 		global appSessionManager
+		global pluginLifecycleManager
 		global debug
 
 		from tornado.ioloop import IOLoop
-		from tornado.web import Application
+		from tornado.web import Application, RequestHandler
 
 		import sys
 
 		debug = self._debug
 
 		# first initialize the settings singleton and make sure it uses given configfile and basedir if available
-		settings(init=True, basedir=self._basedir, configfile=self._configfile)
+		s = settings(init=True, basedir=self._basedir, configfile=self._configfile)
+
+		# then monkey patch a bunch of stuff
+		util.tornado.fix_ioloop_scheduling()
+		util.flask.enable_additional_translations(additional_folders=[s.getBaseFolder("translations")])
+
+		# setup app
+		self._setup_app()
+
+		# setup i18n
+		self._setup_i18n(app)
 
 		# then initialize logging
 		self._setup_logging(self._debug, self._logConf)
@@ -586,9 +176,9 @@ class Server():
 		printerProfileManager = PrinterProfileManager()
 		eventManager = events.eventManager()
 		analysisQueue = octoprint.filemanager.analysis.AnalysisQueue()
-		slicingManager = octoprint.slicing.SlicingManager(settings().getBaseFolder("slicingProfiles"), printerProfileManager)
+		slicingManager = octoprint.slicing.SlicingManager(s.getBaseFolder("slicingProfiles"), printerProfileManager)
 		storage_managers = dict()
-		storage_managers[octoprint.filemanager.FileDestinations.LOCAL] = octoprint.filemanager.storage.LocalFileStorage(settings().getBaseFolder("uploads"))
+		storage_managers[octoprint.filemanager.FileDestinations.LOCAL] = octoprint.filemanager.storage.LocalFileStorage(s.getBaseFolder("uploads"))
 		fileManager = octoprint.filemanager.FileManager(analysisQueue, slicingManager, printerProfileManager, initial_storage_managers=storage_managers)
 		printer = Printer(fileManager, analysisQueue, printerProfileManager)
 		appSessionManager = util.flask.AppSessionManager()
@@ -646,6 +236,9 @@ class Server():
 		pluginLifecycleManager.add_callback("enabled", template_enabled)
 		pluginLifecycleManager.add_callback("disabled", template_disabled)
 
+		# setup assets
+		self._setup_assets()
+
 		# configure timelapse
 		octoprint.timelapse.configureTimelapse()
 
@@ -654,8 +247,9 @@ class Server():
 		if self._debug:
 			events.DebugEventListener()
 
-		if settings().getBoolean(["accessControl", "enabled"]):
-			userManagerName = settings().get(["accessControl", "userManager"])
+		# setup access control
+		if s.getBoolean(["accessControl", "enabled"]):
+			userManagerName = s.get(["accessControl", "userManager"])
 			try:
 				clazz = octoprint.util.get_class(userManagerName)
 				userManager = clazz()
@@ -664,22 +258,22 @@ class Server():
 
 		app.wsgi_app = util.ReverseProxied(
 			app.wsgi_app,
-			settings().get(["server", "reverseProxy", "prefixHeader"]),
-			settings().get(["server", "reverseProxy", "schemeHeader"]),
-			settings().get(["server", "reverseProxy", "hostHeader"]),
-			settings().get(["server", "reverseProxy", "prefixFallback"]),
-			settings().get(["server", "reverseProxy", "schemeFallback"]),
-			settings().get(["server", "reverseProxy", "hostFallback"])
+			s.get(["server", "reverseProxy", "prefixHeader"]),
+			s.get(["server", "reverseProxy", "schemeHeader"]),
+			s.get(["server", "reverseProxy", "hostHeader"]),
+			s.get(["server", "reverseProxy", "prefixFallback"]),
+			s.get(["server", "reverseProxy", "schemeFallback"]),
+			s.get(["server", "reverseProxy", "hostFallback"])
 		)
 
-		secret_key = settings().get(["server", "secretKey"])
+		secret_key = s.get(["server", "secretKey"])
 		if not secret_key:
 			import string
 			from random import choice
 			chars = string.ascii_lowercase + string.ascii_uppercase + string.digits
 			secret_key = "".join(choice(chars) for _ in xrange(32))
-			settings().set(["server", "secretKey"], secret_key)
-			settings().save()
+			s.set(["server", "secretKey"], secret_key)
+			s.save()
 		app.secret_key = secret_key
 		loginManager = LoginManager()
 		loginManager.session_protection = "strong"
@@ -690,19 +284,14 @@ class Server():
 		loginManager.init_app(app)
 
 		if self._host is None:
-			self._host = settings().get(["server", "host"])
+			self._host = s.get(["server", "host"])
 		if self._port is None:
-			self._port = settings().getInt(["server", "port"])
+			self._port = s.getInt(["server", "port"])
 
 		app.debug = self._debug
 
 		# register API blueprint
 		self._setup_blueprints()
-		def blueprint_enabled(name, plugin):
-			if plugin.implementation is None or not isinstance(plugin.implementation, octoprint.plugin.BlueprintPlugin):
-				return
-			self._register_blueprint_plugin(plugin.implementation)
-		pluginLifecycleManager.add_callback(["enabled"], blueprint_enabled)
 
 		## Tornado initialization starts here
 
@@ -711,16 +300,45 @@ class Server():
 
 		self._router = SockJSRouter(self._create_socket_connection, "/sockjs")
 
-		upload_suffixes = dict(name=settings().get(["server", "uploads", "nameSuffix"]), path=settings().get(["server", "uploads", "pathSuffix"]))
-		self._tornado_app = Application(self._router.urls + [
-			(r"/downloads/timelapse/([^/]*\.mpg)", util.tornado.LargeResponseHandler, dict(path=settings().getBaseFolder("timelapse"), as_attachment=True)),
-			(r"/downloads/files/local/([^/]*\.(gco|gcode|g|stl))", util.tornado.LargeResponseHandler, dict(path=settings().getBaseFolder("uploads"), as_attachment=True)),
-			(r"/downloads/logs/([^/]*)", util.tornado.LargeResponseHandler, dict(path=settings().getBaseFolder("logs"), as_attachment=True, access_validation=util.tornado.access_validation_factory(app, loginManager, util.flask.admin_validator))),
-			(r"/downloads/camera/current", util.tornado.UrlForwardHandler, dict(url=settings().get(["webcam", "snapshot"]), as_attachment=True, access_validation=util.tornado.access_validation_factory(app, loginManager, util.flask.user_validator))),
-			(r".*", util.tornado.UploadStorageFallbackHandler, dict(fallback=util.tornado.WsgiInputContainer(app.wsgi_app), file_prefix="octoprint-file-upload-", file_suffix=".tmp", suffixes=upload_suffixes))
-		])
+		upload_suffixes = dict(name=s.get(["server", "uploads", "nameSuffix"]), path=s.get(["server", "uploads", "pathSuffix"]))
+
+		server_routes = self._router.urls + [
+			# various downloads
+			(r"/downloads/timelapse/([^/]*\.mpg)", util.tornado.LargeResponseHandler, dict(path=s.getBaseFolder("timelapse"), as_attachment=True)),
+			(r"/downloads/files/local/(.*)", util.tornado.LargeResponseHandler, dict(path=s.getBaseFolder("uploads"), as_attachment=True, path_validation=util.tornado.path_validation_factory(lambda path: not os.path.basename(path).startswith("."), status_code=404))),
+			(r"/downloads/logs/([^/]*)", util.tornado.LargeResponseHandler, dict(path=s.getBaseFolder("logs"), as_attachment=True, access_validation=util.tornado.access_validation_factory(app, loginManager, util.flask.admin_validator))),
+			# camera snapshot
+			(r"/downloads/camera/current", util.tornado.UrlForwardHandler, dict(url=s.get(["webcam", "snapshot"]), as_attachment=True, access_validation=util.tornado.access_validation_factory(app, loginManager, util.flask.user_validator))),
+			# generated webassets
+			(r"/static/webassets/(.*)", util.tornado.LargeResponseHandler, dict(path=os.path.join(s.getBaseFolder("generated"), "webassets")))
+		]
+		for name, hook in pluginManager.get_hooks("octoprint.server.http.routes").items():
+			try:
+				result = hook(list(server_routes))
+			except:
+				self._logger.exception("There was an error while retrieving additional server routes from plugin hook {name}".format(**locals()))
+			else:
+				if isinstance(result, (list, tuple)):
+					for entry in result:
+						if not isinstance(entry, tuple) or not len(entry) == 3:
+							continue
+						if not isinstance(entry[0], basestring):
+							continue
+						if not isinstance(entry[2], dict):
+							continue
+
+						route, handler, kwargs = entry
+						route = r"/plugin/{name}/{route}".format(name=name, route=route if not route.startswith("/") else route[1:])
+
+						self._logger.debug("Adding additional route {route} handled by handler {handler} and with additional arguments {kwargs!r}".format(**locals()))
+						server_routes.append((route, handler, kwargs))
+
+		server_routes.append((r".*", util.tornado.UploadStorageFallbackHandler, dict(fallback=util.tornado.WsgiInputContainer(app.wsgi_app), file_prefix="octoprint-file-upload-", file_suffix=".tmp", suffixes=upload_suffixes)))
+
+		self._tornado_app = Application(server_routes)
 		max_body_sizes = [
-			("POST", r"/api/files/([^/]*)", settings().getInt(["server", "uploads", "maxSize"]))
+			("POST", r"/api/files/([^/]*)", s.getInt(["server", "uploads", "maxSize"])),
+			("POST", r"/api/languages", 5 * 1024 * 1024)
 		]
 
 		# allow plugins to extend allowed maximum body sizes
@@ -739,15 +357,18 @@ class Server():
 						if not isinstance(entry[2], int):
 							continue
 
-						self._logger.debug("Adding maximum body size of {size}B for {method} requests to {path} (Plugin: {name})".format(method=entry[0], path=entry[1], size=entry[2], name=name))
-						max_body_sizes.append(entry)
+						method, route, size = entry
+						route = r"/plugin/{name}/{route}".format(name=name, route=route if not route.startswith("/") else route[1:])
 
-		self._server = util.tornado.CustomHTTPServer(self._tornado_app, max_body_sizes=max_body_sizes, default_max_body_size=settings().getInt(["server", "maxSize"]))
+						self._logger.debug("Adding maximum body size of {size}B for {method} requests to {route})".format(**locals()))
+						max_body_sizes.append((method, route, size))
+
+		self._server = util.tornado.CustomHTTPServer(self._tornado_app, max_body_sizes=max_body_sizes, default_max_body_size=s.getInt(["server", "maxSize"]))
 		self._server.listen(self._port, address=self._host)
 
 		eventManager.fire(events.Events.STARTUP)
-		if settings().getBoolean(["serial", "autoconnect"]):
-			(port, baudrate) = settings().get(["serial", "port"]), settings().getInt(["serial", "baudrate"])
+		if s.getBoolean(["serial", "autoconnect"]):
+			(port, baudrate) = s.get(["serial", "port"]), s.getInt(["serial", "baudrate"])
 			printer_profile = printerProfileManager.get_default()
 			connectionOptions = get_connection_options()
 			if port in connectionOptions["ports"]:
@@ -755,7 +376,7 @@ class Server():
 
 		# start up watchdogs
 		observer = Observer()
-		observer.schedule(util.watchdog.GcodeWatchdogHandler(fileManager, printer), settings().getBaseFolder("watched"))
+		observer.schedule(util.watchdog.GcodeWatchdogHandler(fileManager, printer), s.getBaseFolder("watched"))
 		observer.start()
 
 		# run our startup plugins
@@ -818,6 +439,27 @@ class Server():
 	def _check_for_root(self):
 		if "geteuid" in dir(os) and os.geteuid() == 0:
 			exit("You should not run OctoPrint as root!")
+
+	def _get_locale(self):
+		global LANGUAGES
+
+		if "l10n" in request.values:
+			return Locale.negotiate([request.values["l10n"]], LANGUAGES)
+
+		if hasattr(g, "identity") and g.identity and userManager is not None:
+			userid = g.identity.id
+			try:
+				user_language = userManager.getUserSetting(userid, ("interface", "language"))
+				if user_language is not None and not user_language == "_default":
+					return Locale.negotiate([user_language], LANGUAGES)
+			except octoprint.users.UnknownUser:
+				pass
+
+		default_language = settings().get(["appearance", "defaultLanguage"])
+		if default_language is not None and not default_language == "_default" and default_language in LANGUAGES:
+			return Locale.negotiate([default_language], LANGUAGES)
+
+		return request.accept_languages.best_match(LANGUAGES)
 
 	def _setup_logging(self, debug, logConf=None):
 		defaultConfig = {
@@ -893,6 +535,45 @@ class Server():
 			logging.getLogger("SERIAL").setLevel(logging.DEBUG)
 			logging.getLogger("SERIAL").debug("Enabling serial logging")
 
+	def _setup_app(self):
+		@app.before_request
+		def before_request():
+			g.locale = self._get_locale()
+
+		@app.after_request
+		def after_request(response):
+			# send no-cache headers with all POST responses
+			if request.method == "POST":
+				response.cache_control.no_cache = True
+			response.headers.add("X-Clacks-Overhead", "GNU Terry Pratchett")
+			return response
+
+	def _setup_i18n(self, app):
+		global babel
+		global LOCALES
+		global LANGUAGES
+
+		babel = Babel(app)
+
+		def get_available_locale_identifiers(locales):
+			result = set()
+
+			# add available translations
+			for locale in locales:
+				result.add(locale.language)
+				if locale.territory:
+					# if a territory is specified, add that too
+					result.add("%s_%s" % (locale.language, locale.territory))
+
+			return result
+
+		LOCALES = babel.list_translations()
+		LANGUAGES = get_available_locale_identifiers(LOCALES)
+
+		@babel.localeselector
+		def get_locale():
+			return self._get_locale()
+
 	def _setup_jinja2(self):
 		app.jinja_env.add_extension("jinja2.ext.do")
 
@@ -927,7 +608,8 @@ class Server():
 
 	def _setup_blueprints(self):
 		from octoprint.server.api import api
-		from octoprint.server.apps import apps
+		from octoprint.server.apps import apps, clear_registered_app
+		import octoprint.server.views
 
 		app.register_blueprint(api, url_prefix="/api")
 		app.register_blueprint(apps, url_prefix="/apps")
@@ -935,10 +617,26 @@ class Server():
 		# also register any blueprints defined in BlueprintPlugins
 		self._register_blueprint_plugins()
 
+		# and register a blueprint for serving the static files of asset plugins which are not blueprint plugins themselves
+		self._register_asset_plugins()
+
+		global pluginLifecycleManager
+		def clear_apps(name, plugin):
+			clear_registered_app()
+		pluginLifecycleManager.add_callback("enabled", clear_apps)
+		pluginLifecycleManager.add_callback("disabled", clear_apps)
+
 	def _register_blueprint_plugins(self):
 		blueprint_plugins = octoprint.plugin.plugin_manager().get_implementations(octoprint.plugin.BlueprintPlugin)
 		for plugin in blueprint_plugins:
 			self._register_blueprint_plugin(plugin)
+
+	def _register_asset_plugins(self):
+		asset_plugins = octoprint.plugin.plugin_manager().get_implementations(octoprint.plugin.AssetPlugin)
+		for plugin in asset_plugins:
+			if isinstance(plugin, octoprint.plugin.BlueprintPlugin):
+				continue
+			self._register_asset_plugin(plugin)
 
 	def _register_blueprint_plugin(self, plugin):
 		name = plugin._identifier
@@ -956,6 +654,144 @@ class Server():
 
 		if self._logger:
 			self._logger.debug("Registered API of plugin {name} under URL prefix {url_prefix}".format(name=name, url_prefix=url_prefix))
+
+	def _register_asset_plugin(self, plugin):
+		name = plugin._identifier
+
+		url_prefix = "/plugin/{name}".format(name=name)
+		blueprint = Blueprint("plugin." + name, name, static_folder=plugin.get_asset_folder())
+		app.register_blueprint(blueprint, url_prefix=url_prefix)
+
+		if self._logger:
+			self._logger.debug("Registered assets of plugin {name} under URL prefix {url_prefix}".format(name=name, url_prefix=url_prefix))
+
+	def _setup_assets(self):
+		global app
+		global assets
+		global pluginManager
+
+		util.flask.fix_webassets_cache()
+
+		base_folder = settings().getBaseFolder("generated")
+
+		AdjustedEnvironment = type(Environment)(Environment.__name__, (Environment,), dict(
+			resolver_class=util.flask.PluginAssetResolver
+		))
+		class CustomDirectoryEnvironment(AdjustedEnvironment):
+			@property
+			def directory(self):
+				return base_folder
+
+		assets = CustomDirectoryEnvironment(app)
+		assets.debug = not settings().getBoolean(["devel", "webassets", "bundle"])
+
+		UpdaterType = type(util.flask.SettingsCheckUpdater)(util.flask.SettingsCheckUpdater.__name__, (util.flask.SettingsCheckUpdater,), dict(
+			updater=assets.updater
+		))
+		assets.updater = UpdaterType
+
+		enable_gcodeviewer = settings().getBoolean(["gcodeViewer", "enabled"])
+		enable_timelapse = (settings().get(["webcam", "snapshot"]) and settings().get(["webcam", "ffmpeg"]))
+		preferred_stylesheet = settings().get(["devel", "stylesheet"])
+
+		dynamic_assets = util.flask.collect_plugin_assets(
+			enable_gcodeviewer=enable_gcodeviewer,
+			enable_timelapse=enable_timelapse,
+			preferred_stylesheet=preferred_stylesheet
+		)
+
+		js_libs = [
+			"js/lib/jquery/jquery.min.js",
+			"js/lib/modernizr.custom.js",
+			"js/lib/lodash.min.js",
+			"js/lib/sprintf.min.js",
+			"js/lib/knockout.js",
+			"js/lib/knockout.mapping-latest.js",
+			"js/lib/babel.js",
+			"js/lib/avltree.js",
+			"js/lib/bootstrap/bootstrap.js",
+			"js/lib/bootstrap/bootstrap-modalmanager.js",
+			"js/lib/bootstrap/bootstrap-modal.js",
+			"js/lib/bootstrap/bootstrap-slider.js",
+			"js/lib/bootstrap/bootstrap-tabdrop.js",
+			"js/lib/jquery/jquery.ui.core.js",
+			"js/lib/jquery/jquery.ui.widget.js",
+			"js/lib/jquery/jquery.ui.mouse.js",
+			"js/lib/jquery/jquery.flot.js",
+			"js/lib/jquery/jquery.iframe-transport.js",
+			"js/lib/jquery/jquery.fileupload.js",
+			"js/lib/jquery/jquery.slimscroll.min.js",
+			"js/lib/jquery/jquery.qrcode.min.js",
+			"js/lib/moment-with-locales.min.js",
+			"js/lib/pusher.color.min.js",
+			"js/lib/detectmobilebrowser.js",
+			"js/lib/md5.min.js",
+			"js/lib/pnotify.min.js",
+			"js/lib/bootstrap-slider-knockout-binding.js",
+			"js/lib/loglevel.min.js",
+			"js/lib/sockjs-0.3.4.min.js"
+		]
+		js_app = dynamic_assets["js"] + [
+			"js/app/dataupdater.js",
+			"js/app/helpers.js",
+			"js/app/main.js",
+		]
+
+		css_libs = [
+			"css/bootstrap.min.css",
+			"css/bootstrap-modal.css",
+			"css/bootstrap-slider.css",
+			"css/bootstrap-tabdrop.css",
+			"css/font-awesome.min.css",
+			"css/jquery.fileupload-ui.css",
+			"css/pnotify.min.css"
+		]
+		css_app = list(dynamic_assets["css"])
+		if len(css_app) == 0:
+			css_app = ["empty"]
+
+		less_app = list(dynamic_assets["less"])
+		if len(less_app) == 0:
+			less_app = ["empty"]
+
+		js_libs_bundle = Bundle(*js_libs, output="webassets/packed_libs.js")
+		if settings().getBoolean(["devel", "webassets", "minify"]):
+			js_app_bundle = Bundle(*js_app, output="webassets/package_app.js", filters="rjsmin")
+		else:
+			js_app_bundle = Bundle(*js_app, output="webassets/package_app.js")
+		all_js_bundle = Bundle(js_libs_bundle, js_app_bundle, output="webassets/packed.js")
+
+		css_libs_bundle = Bundle(*css_libs, output="webassets/packed_libs.css")
+		css_app_bundle = Bundle(*css_app, output="webassets/packed_app.css")
+
+		from webassets.filter import register_filter
+		from webassets.filter.cssrewrite.base import PatternRewriter
+		import re
+		class LessImportRewrite(PatternRewriter):
+			name = "less_importrewrite"
+
+			patterns = {
+				"import_rewrite": re.compile("(@import(\s+\(.*\))?\s+)\"(.*)\";")
+			}
+
+			def import_rewrite(self, m):
+				import_with_options = m.group(1)
+				import_url = m.group(3)
+
+				if not import_url.startswith("http:") and not import_url.startswith("https:") and not import_url.startswith("/"):
+					import_url = "../less/" + import_url
+
+				return "{import_with_options}\"{import_url}\";".format(**locals())
+
+		register_filter(LessImportRewrite)
+
+		all_css_bundle = Bundle(css_libs_bundle, css_app_bundle, output="webassets/packed.css")
+		all_less_bundle = Bundle(*less_app, output="webassets/packed.less", filters="less_importrewrite")
+
+		assets.register("all_js", all_js_bundle)
+		assets.register("all_css", all_css_bundle)
+		assets.register("less_app", all_less_bundle)
+
 
 class LifecycleManager(object):
 	def __init__(self, plugin_manager):

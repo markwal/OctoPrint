@@ -281,6 +281,8 @@ class Timelapse(object):
 		filters = []
 
 		# flip video if configured
+		if settings().getBoolean(["webcam", "rotate90"]):
+			filters.append('transpose=1')
 		if settings().getBoolean(["webcam", "flipH"]):
 			filters.append('hflip')
 		if settings().getBoolean(["webcam", "flipV"]):
@@ -349,7 +351,7 @@ class ZTimelapse(Timelapse):
 
 	def eventSubscriptions(self):
 		return [
-			("ZChange", self._onZChange)
+			(Events.Z_CHANGE, self._onZChange)
 		]
 
 	def configData(self):

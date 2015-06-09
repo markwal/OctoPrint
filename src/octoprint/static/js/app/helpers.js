@@ -11,6 +11,7 @@ function ItemListHelper(listType, supportedSorting, supportedFilters, defaultSor
     self.searchFunction = undefined;
 
     self.allItems = [];
+    self.allSize = ko.observable(0);
 
     self.items = ko.observableArray([]);
     self.pageSize = ko.observable(filesPerPage);
@@ -27,6 +28,7 @@ function ItemListHelper(listType, supportedSorting, supportedFilters, defaultSor
 
     self.updateItems = function(items) {
         self.allItems = items;
+        self.allSize(items.length);
         self._updateItems();
     };
 
@@ -444,4 +446,18 @@ function showConfirmationDialog(message, onacknowledge) {
         onacknowledge(e);
     });
     confirmationDialog.modal("show");
+}
+
+function commentableLinesToArray(lines) {
+    return splitTextToArray(lines, "\n", true, function(item) {return !_.startsWith(item, "#")});
+}
+
+function splitTextToArray(text, sep, stripEmpty, filter) {
+    return _.filter(
+        _.map(
+            text.split(sep),
+            function(item) { return (item) ? item.trim() : ""; }
+        ),
+        function(item) { return (stripEmpty ? item : true) && (filter ? filter(item) : true); }
+    );
 }
