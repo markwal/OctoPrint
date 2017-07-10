@@ -16,3 +16,6 @@ octoprintonair:
 news:
   title: News
   rss: OctoPrint News
+info:
+  title: General Information
+  rss: General Information
